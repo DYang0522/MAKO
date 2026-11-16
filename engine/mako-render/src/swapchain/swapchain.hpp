@@ -521,6 +521,8 @@ namespace mako::layer {
         // inferred again from the current SDR/HDR colour pipeline.
         bool privateOrderedTransport{false};
         std::optional<uint32_t> gamescopeRefreshHz;
+        // Refresh rate published by applications whose WSI cannot expose the display clock.
+        std::optional<uint32_t> applicationRefreshHz;
         GamescopePresentationFeedback gamescopePresentationFeedback;
         FixedRefreshBudget fixedRefreshBudget;
         RealFramePacer realFramePacer;
