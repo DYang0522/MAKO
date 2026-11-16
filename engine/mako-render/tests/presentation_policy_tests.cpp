@@ -2718,6 +2718,53 @@ int main() {
     expect(generated >= 115 && generated <= 125,
         "100 FPS Fixed 2x should synthesize only the displayable remainder");
 
+    // An application-provided display refresh must cap both fixed and
+    // adaptive output plans even when no compositor refresh feedback exists.
+    budget.reset();
+    generated = 0;
+    for (size_t frame = 0; frame <= 300; ++frame) {
+        generated += budget.plan(
+            start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(static_cast<double>(frame) / 30.0)
+            ),
+            60,
+            4,
+            false
+        );
+    }
+    expect(generated == 300,
+        "30 FPS source on a 60 Hz display must not queue more than one generated frame per source frame");
+
+    budget.reset();
+    generated = 0;
+    for (size_t frame = 0; frame <= 200; ++frame) {
+        generated += budget.plan(
+            start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(static_cast<double>(frame) / 20.0)
+            ),
+            60,
+            4,
+            false
+        );
+    }
+    expect(generated == 400,
+        "20 FPS source on a 60 Hz display must budget two generated frames per source frame");
+
+    budget.reset();
+    generated = 0;
+    for (size_t frame = 0; frame <= 600; ++frame) {
+        generated += budget.plan(
+            start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(static_cast<double>(frame) / 60.0)
+            ),
+            60,
+            4,
+            false
+        );
+    }
+    expect(generated == 0,
+        "60 FPS source on a 60 Hz display must not add generated frames");
+
     // With Smooth Cadence and ordered FIFO, Fixed requests its full multiplier
     // and lets the present queue provide back-pressure instead of sleeping in
     // the game present call. First-frame and long-stall guards still apply.
