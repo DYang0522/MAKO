@@ -124,6 +124,10 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         this->fixedRefreshBudget.reset();
         this->realFramePacer.reset();
         this->sourceIntervalSpacing.reset();
+        if (applicationRefreshHz) {
+            std::clog << "MAKO Renderer: application display refresh rate "
+                      << *applicationRefreshHz << " Hz; source=application-hint\n";
+        }
     }
     this->bridgeOutputBatchSize = 1;
     this->outputSourceDeadline.reset();
