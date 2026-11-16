@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <locale>
@@ -37,6 +38,17 @@ using namespace mako::layer;
 using namespace mako::layer::present_detail;
 
 namespace {
+    std::optional<uint32_t> applicationRefreshRateFromEnvironment() {
+        const char* const value = std::getenv("MAKO_APPLICATION_REFRESH_HZ");
+        if (!value || !*value)
+            return std::nullopt;
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(value, &end, 10);
+        if (end == value || *end != '\\0' || parsed < 24 || parsed > 1000)
+            return std::nullopt;
+        return static_cast<uint32_t>(parsed);
+    }
+
     void logSourceIntervalSpacing(const uint64_t contextId, const size_t frame,
             const SourceIntervalOutputSpacing::Observation& observation) {
         using Transition = SourceIntervalOutputSpacing::Transition;
@@ -106,6 +118,13 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     const DiagnosticsContextScope diagnosticsContext(
         this->diagnosticsState.contextId
     );
+    const auto applicationRefreshHz = applicationRefreshRateFromEnvironment();
+    if (applicationRefreshHz != this->applicationRefreshHz) {
+        this->applicationRefreshHz = applicationRefreshHz;
+        this->fixedRefreshBudget.reset();
+        this->realFramePacer.reset();
+        this->sourceIntervalSpacing.reset();
+    }
     this->bridgeOutputBatchSize = 1;
     this->outputSourceDeadline.reset();
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
