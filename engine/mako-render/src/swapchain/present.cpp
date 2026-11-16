@@ -920,7 +920,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                     this->gamescopeRefreshHz.value_or(
                         this->applicationRefreshHz.value_or(this->profile.target_fps)))
                 : std::min<double>(baseFpsCap * this->profile.multiplier,
-                    this->applicationRefreshHz.value_or(1000U)),
+                    this->gamescopeRefreshHz.value_or(
+                        this->applicationRefreshHz.value_or(1000U))),
             plan.scheduledGeneratedFrames.size() + 1,
             this->adaptiveScheduler &&
                 this->adaptiveScheduler->snapshot().targetOutputClockActive);
