@@ -180,10 +180,12 @@ Swapchain::PresentationFramePlan Swapchain::prepareFramePlan(
             this->gamescopeRefreshHz
         ) && this->configuredFixedGeneratedFrames + 1 ==
             this->profile.multiplier;
+    const auto outputRefreshHz = this->gamescopeRefreshHz
+        ? this->gamescopeRefreshHz : this->applicationRefreshHz;
     const size_t fixedGeneratedFrameCount = schedulerEnabled
         ? 0
         : this->fixedRefreshBudget.plan(
-            presentNow, this->gamescopeRefreshHz,
+            presentNow, outputRefreshHz,
             this->configuredFixedGeneratedFrames,
             fixedSmoothCadenceFullMultiplier
         );
@@ -202,6 +204,21 @@ Swapchain::PresentationFramePlan Swapchain::prepareFramePlan(
         : GeneratedFramePlan::evenlySpaced(
             fixedGeneratedFrameCount
         );
+    // Adaptive policy may request a multiplier above the physical display
+    // rate when the application runs outside Gamescope. Use the same
+    // fractional output budget as Fixed so excess generated frames are never
+    // queued into an ordered FIFO swapchain.
+    if (schedulerEnabled && this->applicationRefreshHz &&
+            !this->gamescopeRefreshHz &&
+            !plan.requestedGeneratedFrames.empty()) {
+        const size_t displayBudget = this->fixedRefreshBudget.plan(
+            presentNow, this->applicationRefreshHz,
+            plan.requestedGeneratedFrames.size(), false
+        );
+        plan.requestedGeneratedFrames = scheduleAdmittedGeneratedFrames(
+            plan.requestedGeneratedFrames, displayBudget
+        );
+    }
     if (orderedAcquireProbeEligible(orderedAcquireRecoveryProbe,
             plan.historyWarmupActive, plan.requestedGeneratedFrames.size())) {
         // A successful native drain proves only that one image can traverse
