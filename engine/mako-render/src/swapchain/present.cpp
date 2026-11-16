@@ -917,8 +917,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             DiagnosticsClock::now(), limiterDeadline,
             this->profile.adaptive
                 ? std::min<double>(this->profile.target_fps,
-                    this->gamescopeRefreshHz.value_or(this->profile.target_fps))
-                : baseFpsCap * this->profile.multiplier,
+                    this->gamescopeRefreshHz.value_or(
+                        this->applicationRefreshHz.value_or(this->profile.target_fps)))
+                : std::min<double>(baseFpsCap * this->profile.multiplier,
+                    this->applicationRefreshHz.value_or(
+                        static_cast<uint32_t>(std::max(1.0, baseFpsCap * this->profile.multiplier)))),
             plan.scheduledGeneratedFrames.size() + 1,
             this->adaptiveScheduler &&
                 this->adaptiveScheduler->snapshot().targetOutputClockActive);
