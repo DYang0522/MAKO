@@ -209,8 +209,7 @@ Swapchain::PresentationFramePlan Swapchain::prepareFramePlan(
     // fractional output budget as Fixed so excess generated frames are never
     // queued into an ordered FIFO swapchain.
     if (schedulerEnabled && this->applicationRefreshHz &&
-            !this->gamescopeRefreshHz &&
-            !plan.requestedGeneratedFrames.empty()) {
+            !this->gamescopeRefreshHz) {
         const size_t displayBudget = this->fixedRefreshBudget.plan(
             presentNow, this->applicationRefreshHz,
             plan.requestedGeneratedFrames.size(), false
