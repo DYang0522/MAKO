@@ -44,7 +44,7 @@ namespace {
             return std::nullopt;
         char* end = nullptr;
         const unsigned long parsed = std::strtoul(value, &end, 10);
-        if (end == value || *end != '\\0' || parsed < 24 || parsed > 1000)
+        if (end == value || *end != '\0' || parsed < 24 || parsed > 1000)
             return std::nullopt;
         return static_cast<uint32_t>(parsed);
     }
@@ -920,8 +920,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                     this->gamescopeRefreshHz.value_or(
                         this->applicationRefreshHz.value_or(this->profile.target_fps)))
                 : std::min<double>(baseFpsCap * this->profile.multiplier,
-                    this->applicationRefreshHz.value_or(
-                        static_cast<uint32_t>(std::max(1.0, baseFpsCap * this->profile.multiplier)))),
+                    this->applicationRefreshHz.value_or(1000U)),
             plan.scheduledGeneratedFrames.size() + 1,
             this->adaptiveScheduler &&
                 this->adaptiveScheduler->snapshot().targetOutputClockActive);
