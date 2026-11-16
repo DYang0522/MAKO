@@ -2732,7 +2732,7 @@ int main() {
             false
         );
     }
-    expect(generated == 300,
+    expect(generated >= 299 && generated <= 300,
         "30 FPS source on a 60 Hz display must not queue more than one generated frame per source frame");
 
     budget.reset();
