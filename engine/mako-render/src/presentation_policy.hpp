@@ -26,11 +26,9 @@ namespace mako::layer {
         using TimePoint = Clock::time_point;
         using Duration = Clock::duration;
 
-        [[nodiscard]] TimePoint advance(const TimePoint wallNow,
-                const std::optional<Duration> rendererWait) noexcept {
-            if (rendererWait && *rendererWait > Duration::zero())
-                this->excludedWait += *rendererWait;
-            return this->toSourceTime(wallNow);
+        void exclude(const Duration rendererWait) noexcept {
+            if (rendererWait > Duration::zero())
+                this->excludedWait += rendererWait;
         }
 
         [[nodiscard]] TimePoint toSourceTime(
