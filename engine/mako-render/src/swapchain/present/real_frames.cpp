@@ -442,9 +442,14 @@ VkResult Swapchain::presentHistoryOnly(
             this->adaptiveScheduler->historyWarmupIsRecovery(),
             std::nullopt
         );
-        const auto recoveryCompleted = std::max(DiagnosticsClock::now(),
+        const auto recoveryCompletedWall = std::max(
+            DiagnosticsClock::now(),
             invocation.originalPresentDeadline.value_or(
-                DiagnosticsClock::time_point{}));
+                DiagnosticsClock::time_point{}
+            )
+        );
+        const auto recoveryCompleted =
+            this->sourceCadenceClock.toSourceTime(recoveryCompletedWall);
         const bool transitionRecoveryActive = this->recoveryState
             .orderedAcquireRecovery.transitionRecoveryActive();
         this->adaptiveScheduler->consumeHistoryWarmupFrame(
