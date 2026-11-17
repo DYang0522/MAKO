@@ -27,6 +27,10 @@ SELECTED_PROFILE = "stream-quality"
 ELF = b"\x7fELF\x02\x01" + b"\0" * 12 + b"\x3e\0" + b"synthetic client"
 SDR_ELF = ELF[:16] + b'\x03\0\x3e\0' + SDR_HELPER_MARKER
 
+# Use a shell ELF as the renamed Steam client. uutils /usr/bin/env on
+# Ubuntu 26.04 rejects running from the .mako-original backup filename.
+NATIVE_ENV_ARGS = ('-c', 'exec /usr/bin/env -0')
+
 
 class RemotePlayTests(unittest.TestCase):
     def setUp(self):
@@ -691,9 +695,9 @@ class RemoteFeatureLaunchTests(unittest.TestCase):
     """Run the installed entry point and the real generated launcher without Vulkan."""
     def setUp(self):
         RemotePlayTests.setUp(self)
-        self.service.client.write_bytes(Path('/usr/bin/env').read_bytes())
+        self.service.client.write_bytes(Path('/bin/sh').read_bytes())
         if not self.service._native_client(self.service.client):
-            self.skipTest('native x86_64 env executable unavailable')
+            self.skipTest('native x86_64 shell fixture unavailable')
         with self.configuration._configuration_write_lock:
             self.configuration.create_profile(SELECTED_PROFILE)
             self.configuration.set_current_profile(SELECTED_PROFILE)
@@ -718,7 +722,7 @@ class RemoteFeatureLaunchTests(unittest.TestCase):
                        'GALLIUM_DRIVER': 'zink', 'ENABLE_GAMESCOPE_WSI': '1', 'ENABLE_VKBASALT': '1'}
         if gamescope:
             environment.update(GAMESCOPE_WAYLAND_DISPLAY='gamescope-0', WAYLAND_DISPLAY='gamescope-0')
-        result = subprocess.run([str(self.service.client), '-0'], env=environment, capture_output=True, timeout=5)
+        result = subprocess.run([str(self.service.client), *NATIVE_ENV_ARGS], env=environment, capture_output=True, timeout=5)
         self.assertEqual(0, result.returncode, result.stderr.decode())
         values = dict(item.decode().split('=', 1) for item in result.stdout.split(b'\0') if item)
         self.assertEqual('1', values['MAKO_REMOTE_PLAY_SDR'])
@@ -816,7 +820,7 @@ class RemoteFeatureLaunchTests(unittest.TestCase):
         data = self.configuration._get_profile_data()
         data['profiles'][SELECTED_PROFILE]['scaling_enabled'] = True
         self.configuration._save_profile_data(data)
-        result = subprocess.run([str(self.service.client), '-0'], capture_output=True,
+        result = subprocess.run([str(self.service.client), *NATIVE_ENV_ARGS], capture_output=True,
                                 env={'PATH': '/usr/bin:/bin', 'HOME': str(self.home)}, timeout=5)
         self.assertEqual(0, result.returncode, result.stderr.decode())
         values = dict(item.decode().split('=', 1) for item in result.stdout.split(b'\0') if item)
