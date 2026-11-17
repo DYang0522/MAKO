@@ -569,6 +569,10 @@ namespace mako::layer {
         // One cumulative source-time offset keeps all cadence consumers in
         // the same domain while wall-clock deadlines remain convertible.
         SourceCadenceClock sourceCadenceClock;
+        // Measured synchronous waits inside this present call; deliberate
+        // cap/output sleeps are excluded. Applied to source time on return.
+        std::chrono::steady_clock::duration currentRendererBlockingDuration{};
+        bool rendererBlockingMeasurementActive{false};
         CappedFifoBacklogDrain cappedFifoBacklogDrain;
         // The implicit Zink cap at the last present, for its change record.
         double zinkRefreshLimitedCap{};
@@ -683,6 +687,12 @@ namespace mako::layer {
             const PresentInvocation& invocation,
             const PresentationFramePlan& plan,
             bool gamescopeHdrTransport);
+        void recordRendererBlockingDuration(
+            std::chrono::steady_clock::duration duration) noexcept {
+            if (this->rendererBlockingMeasurementActive &&
+                    duration > std::chrono::steady_clock::duration::zero())
+                this->currentRendererBlockingDuration += duration;
+        }
         [[nodiscard]] VkResult queuePresentWithRetirementFence(
             const vk::Vulkan& vk, VkQueue queue,
             const VkPresentInfoKHR& presentInfo);
