@@ -33,7 +33,7 @@ namespace {
     void testRendererAcquireWaitDoesNotDriftSourceCadence() {
         using Clock = std::chrono::steady_clock;
         const auto origin = Clock::time_point{} + std::chrono::hours(100000);
-        const std::array rendererWaits{
+        const std::array<Clock::duration, 8> rendererWaits{
             0ms, 16ms, 16667us, 8ms, 23ms, 1ms, 16667us, 5ms,
         };
 
