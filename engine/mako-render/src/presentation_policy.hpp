@@ -1895,6 +1895,19 @@ namespace mako::layer {
         size_t holds{0};
     };
 
+    /// The capped backlog drain needs blocking private acquires as queue
+    /// evidence and a CPU source cap that owns real-frame release. The ordered
+    /// SDR transport provides both. The HDR transport never blocks an acquire,
+    /// and the scaling bridge and owned display timing pace outputs in the
+    /// compositor with their own queue reserve. A Zink acquire window keeps
+    /// the drain wherever it applies.
+    [[nodiscard]] constexpr bool cappedFifoBacklogDrainApplies(
+            const bool applicationAcquireWindow, const bool privateOrderedTransport,
+            const bool compositorOutputTiming) noexcept {
+        return applicationAcquireWindow ||
+            (privateOrderedTransport && !compositorOutputTiming);
+    }
+
     /// Zink only: under an ordered-FIFO handoff, a source faster than the
     /// rung's admission rate waits on presentation and fills FIFO. Its rate
     /// stays exact, so the surplus count never fires, but Zink's worker-thread
