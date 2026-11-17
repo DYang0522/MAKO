@@ -309,9 +309,8 @@ namespace mako::layer {
             uint32_t imageIndex;
             std::span<const VkSemaphore> waitSemaphores;
             std::chrono::steady_clock::time_point cadenceStarted;
-            // Renderer-owned acquire blocking from the preceding present;
-            // excluded from the source interval passed to the FG backend.
-            std::optional<std::chrono::steady_clock::duration> sourceCadenceWait;
+            // Prevent an adjusted cadence timestamp from falling below
+            // the active source-cap interval.
             std::optional<std::chrono::steady_clock::duration> sourceCadenceFloor;
             mutable std::chrono::steady_clock::time_point started;
             // Fractional may spend the existing cap wait preparing generated
@@ -375,18 +374,13 @@ namespace mako::layer {
             [[nodiscard]] std::chrono::nanoseconds backendSourceInterval(
                     const std::chrono::steady_clock::time_point cadence,
                     const std::optional<std::chrono::steady_clock::duration>
-                        rendererWait = std::nullopt,
-                    const std::optional<std::chrono::steady_clock::duration>
                         minimumInterval = std::nullopt) const {
                 if (!this->backendSourceCadence ||
                         cadence <= *this->backendSourceCadence)
                     return {};
                 auto interval = cadence - *this->backendSourceCadence;
-                // The previous vkPresent call may have blocked while waiting
-                // for MAKO-owned generated swapchain images. That wait is not
-                // part of the game's source-frame interval.
-                if (rendererWait)
-                    interval -= *rendererWait;
+                // cadence is already in the canonical source-time domain;
+                // subtracting renderer waits here would count them twice.
                 if (minimumInterval)
                     interval = std::max(interval, *minimumInterval);
                 else
