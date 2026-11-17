@@ -468,11 +468,15 @@ void Swapchain::preacquireGeneratedImages(
     for (size_t i = 0; i < plan.requestedGeneratedFrames.size(); ++i) {
         uint32_t acquiredImage{};
         const auto acquireStarted = startPresentDiagnostic();
+        const auto rendererAcquireStarted = DiagnosticsClock::now();
         lastAcquireResult = invocation.vk.df().AcquireNextImageKHR(
             invocation.vk.dev(), invocation.swapchain,
             acquireTimeout,
             this->passes.at(i).acquireSemaphore.handle(), VK_NULL_HANDLE,
             &acquiredImage
+        );
+        this->recordRendererBlockingDuration(
+            DiagnosticsClock::now() - rendererAcquireStarted
         );
         plan.preacquireDuration += finishPresentDiagnostic(acquireStarted);
         if (lastAcquireResult == VK_SUCCESS ||
