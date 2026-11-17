@@ -75,7 +75,7 @@ bool Swapchain::resetGenerationScheduler(
         &present_diagnostics::adaptiveScheduler()
     );
     this->adaptiveScheduler->beginStabilization(
-        this->sourceCadenceClock.toSourceTime(now), reason
+        this->sourceTimeAt(now), reason
     );
     this->recoveryState.historyWarmupRemaining = 0;
     return true;
@@ -102,7 +102,7 @@ void Swapchain::applyGamescopeFocus(const DiagnosticsClock::time_point now) {
             ));
         } else if (this->adaptiveScheduler) {
             this->adaptiveScheduler->resumeAfterExternalInterruption(
-                this->sourceCadenceClock.toSourceTime(now), returned
+                this->sourceTimeAt(now), returned
             );
         }
         this->ensureHistoryWarmup(true);
@@ -449,7 +449,7 @@ ProfileUpdateDecision Swapchain::updateProfile(
     if (decision.gpuHeadroomChanged && plan.appliedProfile.gpu_headroom_percent == 0 &&
             this->gpuHeadroomResult.capFps > 0 && plan.appliedProfile.adaptive && this->adaptiveScheduler)
         this->adaptiveScheduler->requestHeadroomRecovery(
-            this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now()),
+            this->sourceTimeAt(DiagnosticsClock::now()),
             this->gpuHeadroom.sourceCeilingFps()
         );
     if (decision.gpuHeadroomChanged || decision.generationModeChanged ||
@@ -569,7 +569,7 @@ ProfileUpdateDecision Swapchain::updateProfile(
     } else if (decision.dynamicCadenceProbeIntervalChanged &&
             this->adaptiveScheduler) {
         this->adaptiveScheduler->updateDynamicCadenceProbeInterval(
-            this->sourceCadenceClock.toSourceTime(profileUpdateNow),
+            this->sourceTimeAt(profileUpdateNow),
             ls::dynamicCadenceProbeIntervalDuration(
                 this->profile.dynamic_cadence_probe_interval_seconds
             )
@@ -836,7 +836,7 @@ void Swapchain::updateGamescopePresentationFeedback(
             this->recoveryState.orderedAcquireRecovery.active(),
             this->gamescopeRefreshHz, previous, feedback)) {
         static_cast<void>(this->adaptiveScheduler->refreshHigherLoadRetry(
-            this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now())));
+            this->sourceTimeAt(DiagnosticsClock::now())));
     }
     const auto schedulerSnapshot = this->adaptiveScheduler
         ? this->adaptiveScheduler->snapshot()
