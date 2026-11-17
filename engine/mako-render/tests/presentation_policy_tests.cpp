@@ -30,16 +30,16 @@ namespace {
         std::exit(1);
     }
 
-    void testRendererAcquireWaitDoesNotDriftSourceCadence() {
+    void testRendererBlockingWaitDoesNotDriftSourceCadence() {
         using Clock = std::chrono::steady_clock;
         const auto origin = Clock::time_point{} + std::chrono::hours(100000);
         const std::array<Clock::duration, 8> rendererWaits{
             0ms, 16ms, 16667us, 8ms, 23ms, 1ms, 16667us, 5ms,
         };
 
-        // The renderer wait belongs to the interval between application
-        // presents. Accumulate it once so adjacent source timestamps differ
-        // by the game's cadence, even when the wait duration varies.
+        // A renderer wait occurs inside one present call and is recorded
+        // before that call returns. The next application's wall-clock arrival
+        // therefore contains the accumulated waits from preceding calls.
         for (const double sourceFps : {30.0, 29.0}) {
             const auto interval = std::chrono::duration_cast<Clock::duration>(
                 std::chrono::duration<double>(1.0 / sourceFps)
@@ -50,28 +50,31 @@ namespace {
             for (size_t frame = 0; frame < 1200; ++frame) {
                 const auto sourceFrameAt = origin + interval *
                     static_cast<int64_t>(frame);
-                const auto wait = rendererWaits[frame % rendererWaits.size()];
-                accumulatedWait += wait;
                 const auto wallClockArrival = sourceFrameAt + accumulatedWait;
-                const auto cadence = sourceClock.advance(wallClockArrival, wait);
+                const auto cadence = sourceClock.toSourceTime(wallClockArrival);
                 expect(cadence == sourceFrameAt,
-                    "renderer acquire wait remained in the source timestamp");
+                    "renderer blocking remained in the source timestamp");
                 expect(sourceClock.toWallTime(cadence) == wallClockArrival,
                     "source-time deadline did not round-trip to wall time");
                 if (previous)
                     expect(cadence - *previous == interval,
-                        "renderer acquire waits accumulated source-cadence drift");
+                        "renderer blocking accumulated source-cadence drift");
                 previous = cadence;
+
+                const auto wait = rendererWaits[frame % rendererWaits.size()];
+                sourceClock.exclude(wait);
+                accumulatedWait += wait;
             }
             expect(sourceClock.excludedDuration() == accumulatedWait,
-                "renderer wait was not accumulated exactly once");
+                "renderer blocking was not accumulated exactly once");
         }
 
         SourceCadenceClock sourceClock;
         const auto observed = origin + 10ms;
-        expect(sourceClock.advance(observed, std::nullopt) == observed &&
+        sourceClock.exclude(Clock::duration::zero());
+        expect(sourceClock.toSourceTime(observed) == observed &&
                 sourceClock.toWallTime(observed) == observed,
-            "an absent renderer wait changed source time");
+            "a zero renderer wait changed source time");
     }
 
     void testSmoothCadenceCapFollowsActivePlan() {
@@ -2016,7 +2019,7 @@ int main() {
             "disabling a governed cap releases the source immediately");
     }
 
-    testRendererAcquireWaitDoesNotDriftSourceCadence();
+    testRendererBlockingWaitDoesNotDriftSourceCadence();
     testLongSessionDeadlineBounds();
     testFractionalUsesExistingSourceDeadline();
     testFixedUsesExistingSourceDeadline();
