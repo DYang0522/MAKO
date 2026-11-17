@@ -687,6 +687,20 @@ namespace mako::layer {
             const PresentInvocation& invocation,
             const PresentationFramePlan& plan,
             bool gamescopeHdrTransport);
+        [[nodiscard]] std::chrono::steady_clock::time_point sourceTimeAt(
+                const std::chrono::steady_clock::time_point wallTime) const noexcept {
+            const auto currentWait = this->rendererBlockingMeasurementActive
+                ? this->currentRendererBlockingDuration
+                : std::chrono::steady_clock::duration::zero();
+            return this->sourceCadenceClock.toSourceTime(wallTime) - currentWait;
+        }
+        [[nodiscard]] std::chrono::steady_clock::time_point wallTimeAt(
+                const std::chrono::steady_clock::time_point sourceTime) const noexcept {
+            const auto currentWait = this->rendererBlockingMeasurementActive
+                ? this->currentRendererBlockingDuration
+                : std::chrono::steady_clock::duration::zero();
+            return this->sourceCadenceClock.toWallTime(sourceTime) + currentWait;
+        }
         void recordRendererBlockingDuration(
             std::chrono::steady_clock::duration duration) noexcept {
             if (this->rendererBlockingMeasurementActive &&
