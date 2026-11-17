@@ -251,7 +251,10 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                 this->gpuHeadroomResult.capFps == 0 &&
                 (this->gpuHeadroomResult.state == "within-budget" ||
                  this->gpuHeadroomResult.state == "telemetry-unavailable"))
-            this->adaptiveScheduler->requestHeadroomRecovery(headroomNow, previousHeadroomCeiling);
+            this->adaptiveScheduler->requestHeadroomRecovery(
+                this->sourceCadenceClock.toSourceTime(headroomNow),
+                previousHeadroomCeiling
+            );
         if (previousHeadroom.state != this->gpuHeadroomResult.state)
             this->publishRuntimeStatus("gpu-headroom");
         if ((previousHeadroom.capFps > 0) != (this->gpuHeadroomResult.capFps > 0))
@@ -660,7 +663,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             // acquire is attempted until the direct-failure retry deadline.
             if (this->adaptiveScheduler) {
                 static_cast<void>(
-                    this->adaptiveScheduler->planFrame(presentNow, true)
+                    this->adaptiveScheduler->planFrame(cadenceNow, true)
                 );
             } else {
                 this->diagnosticsState.fixedSkippedFrames +=
