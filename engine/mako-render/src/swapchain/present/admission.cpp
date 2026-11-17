@@ -372,7 +372,7 @@ void Swapchain::handleGeneratedImageAdmissionPressure(
     if (adaptiveOrderedAdmissionMiss) {
         static_cast<void>(
             this->adaptiveScheduler->rejectActiveRampForTransportMiss(
-                DiagnosticsClock::now()
+                this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now())
             )
         );
     }
