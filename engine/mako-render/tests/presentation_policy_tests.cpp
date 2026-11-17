@@ -37,35 +37,41 @@ namespace {
             0ms, 16ms, 16667us, 8ms, 23ms, 1ms, 16667us, 5ms,
         };
 
-        // Model a game clock whose source frames remain evenly spaced while
-        // MAKO blocks the application between calls. The raw wall-clock
-        // arrival includes the preceding renderer wait; the canonical source
-        // timestamp must remove exactly that wait, without cumulative drift.
+        // The renderer wait belongs to the interval between application
+        // presents. Accumulate it once so adjacent source timestamps differ
+        // by the game's cadence, even when the wait duration varies.
         for (const double sourceFps : {30.0, 29.0}) {
             const auto interval = std::chrono::duration_cast<Clock::duration>(
                 std::chrono::duration<double>(1.0 / sourceFps)
             );
+            SourceCadenceClock sourceClock;
+            Clock::duration accumulatedWait{};
             std::optional<Clock::time_point> previous;
             for (size_t frame = 0; frame < 1200; ++frame) {
                 const auto sourceFrameAt = origin + interval *
                     static_cast<int64_t>(frame);
                 const auto wait = rendererWaits[frame % rendererWaits.size()];
-                const auto wallClockArrival = sourceFrameAt + wait;
-                const auto cadence = sourceCadenceTime(wallClockArrival, wait);
+                accumulatedWait += wait;
+                const auto wallClockArrival = sourceFrameAt + accumulatedWait;
+                const auto cadence = sourceClock.advance(wallClockArrival, wait);
                 expect(cadence == sourceFrameAt,
                     "renderer acquire wait remained in the source timestamp");
+                expect(sourceClock.toWallTime(cadence) == wallClockArrival,
+                    "source-time deadline did not round-trip to wall time");
                 if (previous)
                     expect(cadence - *previous == interval,
                         "renderer acquire waits accumulated source-cadence drift");
                 previous = cadence;
             }
+            expect(sourceClock.excludedDuration() == accumulatedWait,
+                "renderer wait was not accumulated exactly once");
         }
 
+        SourceCadenceClock sourceClock;
         const auto observed = origin + 10ms;
-        expect(sourceCadenceTime(observed, std::nullopt) == observed &&
-                sourceCadenceTime(observed, 0ms) == observed &&
-                sourceCadenceTime(observed, -1ms) == observed,
-            "an absent, zero or negative renderer wait changed source time");
+        expect(sourceClock.advance(observed, std::nullopt) == observed &&
+                sourceClock.toWallTime(observed) == observed,
+            "an absent renderer wait changed source time");
     }
 
     void testSmoothCadenceCapFollowsActivePlan() {
