@@ -206,6 +206,18 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // source cadence for the fixed-rate limiter or frame-generation backend.
     const auto presentationWait =
         std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
+    // This wait belongs to MAKO's previous generated-image presentation, not
+    // to the game's source interval. Apply the correction even when only the
+    // game itself limits FPS; a MAKO base-FPS cap is not required.
+    const bool subtractPresentationWait =
+        this->privateOrderedTransport &&
+        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
+        presentationWait &&
+        *presentationWait > DiagnosticsClock::duration::zero();
+    const auto sourceCadenceArrival = sourceCadenceTime(
+        limiterArrival,
+        subtractPresentationWait ? presentationWait : std::nullopt
+    );
     this->applyGamescopeFocus(limiterArrival);
     const bool ownedTimingControlsOutput = this->presentTiming.controlsOutput(
         this->gamescopeRefreshHz.value_or(0));
@@ -294,7 +306,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         );
     }
     const auto cadenceBaseCap = this->smoothCadenceBaseCap.update(
-        limiterArrival,
+        sourceCadenceArrival,
         cadenceBaseCapEligible,
         this->profile.target_fps,
         {
@@ -356,7 +368,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // A full FIFO queue shows as waits on MAKO's own generated-image
     // acquires. Only Zink's worker-thread presents also end a handoff on them.
     const auto handoff = this->smoothCadencePacerHandoff.update(
-        limiterArrival, handoffGenerationLimit, plannedVrrProbePause || zinkPacesAdaptive,
+        sourceCadenceArrival, handoffGenerationLimit, plannedVrrProbePause || zinkPacesAdaptive,
         this->gamescopeRefreshHz,
         this->info.applicationAcquireWindow ? presentationWait : std::nullopt
     );
@@ -417,12 +429,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     if (this->gpuHeadroomResult.capFps > 0)
         baseFpsCap = baseFpsCap > 0 ? std::min(baseFpsCap, this->gpuHeadroomResult.capFps)
             : this->gpuHeadroomResult.capFps;
-    const bool subtractPresentationWait =
-        baseFpsCap > 0.0 && this->privateOrderedTransport &&
-        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
-        presentationWait && *presentationWait > DiagnosticsClock::duration::zero();
-    const auto pacingArrival = subtractPresentationWait
-        ? limiterArrival - *presentationWait : limiterArrival;
+    const auto pacingArrival = sourceCadenceArrival;
     const auto sourceCadenceFloor = subtractPresentationWait
         ? std::optional{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(1.0 / baseFpsCap)
@@ -501,11 +508,16 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         ? std::optional{limiterDeadline} : std::nullopt};
 
     const auto presentNow = DiagnosticsClock::now();
-    // Observe the reserved real-frame cadence, while resource/recovery clocks
-    // continue using wall time. Capped work uses the existing limiter's
-    // slack; control returns to the game no earlier than that same deadline.
+    // Keep every source-cadence consumer on the same adjusted timebase:
+    // scheduler planning, cadence observations and backend source intervals.
+    // Wall-clock samples above remain untouched for resource and diagnostic
+    // timing; the limiter deadline is already derived from sourceCadenceArrival.
+    const auto sourceCadenceNow = sourceCadenceTime(
+        presentNow,
+        subtractPresentationWait ? presentationWait : std::nullopt
+    );
     const auto cadenceNow = sourceDeadlinePreparation
-        ? std::max(limiterDeadline, presentNow) : presentNow;
+        ? std::max(limiterDeadline, sourceCadenceNow) : sourceCadenceNow;
     PresentInvocation invocation{
         .vk = vk,
         .queue = queue,
@@ -514,8 +526,6 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         .imageIndex = imageIndex,
         .waitSemaphores = waitSemaphores,
         .cadenceStarted = cadenceNow,
-        .sourceCadenceWait = subtractPresentationWait
-            ? presentationWait : std::nullopt,
         .sourceCadenceFloor = sourceCadenceFloor,
         .started = startPresentDiagnostic(),
         .originalPresentDeadline = sourceDeadlinePacing
@@ -864,8 +874,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             this->instance->scheduleFrames(
                 this->ctx.get(), plan.scheduledGeneratedFrames.timestamps(),
                 this->frameState.backendSourceInterval(
-                    invocation.cadenceStarted, invocation.sourceCadenceWait,
-                    invocation.sourceCadenceFloor
+                    invocation.cadenceStarted, invocation.sourceCadenceFloor
                 )
             );
         } catch (const std::exception& error) {
