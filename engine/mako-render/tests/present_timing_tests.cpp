@@ -329,7 +329,6 @@ int main() {
     expect(realignmentObserved,
         "twelve persistent whole-refresh pixel-out delays trigger FIFO realignment");
     calibrationStage = OwnedPresentTiming::queueStage;
-    expectedStageCount = 1;
 #else
     expect(!OwnedPresentTiming{}.active(), "older manual-build headers keep timing disabled");
 #endif
