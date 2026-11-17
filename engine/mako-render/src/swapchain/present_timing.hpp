@@ -334,6 +334,7 @@ namespace mako::layer {
         VkSwapchainKHR swapchain{};
         Functions functions;
         bool enabled{};
+        VkPresentModeKHR mode{VK_PRESENT_MODE_FIFO_KHR};
         bool absoluteTimeSupported{};
         bool queueStageAvailable{};
         bool outputFeedbackAvailable{};
