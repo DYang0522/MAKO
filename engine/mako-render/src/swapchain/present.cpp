@@ -106,6 +106,29 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     const DiagnosticsContextScope diagnosticsContext(
         this->diagnosticsState.contextId
     );
+    struct RendererBlockingScope {
+        SourceCadenceClock& clock;
+        std::chrono::steady_clock::duration& duration;
+        bool& active;
+        RendererBlockingScope(SourceCadenceClock& sourceClock,
+                std::chrono::steady_clock::duration& measured,
+                bool& measurementActive, const bool enabled)
+            : clock(sourceClock), duration(measured), active(measurementActive) {
+            this->duration = std::chrono::steady_clock::duration::zero();
+            this->active = enabled;
+        }
+        ~RendererBlockingScope() {
+            if (this->active)
+                this->clock.exclude(this->duration);
+            this->active = false;
+            this->duration = std::chrono::steady_clock::duration::zero();
+        }
+    } rendererBlockingScope{
+        this->sourceCadenceClock, this->currentRendererBlockingDuration,
+        this->rendererBlockingMeasurementActive,
+        this->privateOrderedTransport &&
+            this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR
+    };
     this->bridgeOutputBatchSize = 1;
     this->outputSourceDeadline.reset();
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
@@ -214,10 +237,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
         presentationWait &&
         *presentationWait > DiagnosticsClock::duration::zero();
-    const auto sourceCadenceArrival = this->sourceCadenceClock.advance(
-        limiterArrival,
-        subtractPresentationWait ? presentationWait : std::nullopt
-    );
+    const auto sourceCadenceArrival =
+        this->sourceCadenceClock.toSourceTime(limiterArrival);
     this->applyGamescopeFocus(limiterArrival);
     const bool ownedTimingControlsOutput = this->presentTiming.controlsOutput(
         this->gamescopeRefreshHz.value_or(0));
@@ -433,11 +454,14 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         baseFpsCap = baseFpsCap > 0 ? std::min(baseFpsCap, this->gpuHeadroomResult.capFps)
             : this->gpuHeadroomResult.capFps;
     const auto pacingArrival = sourceCadenceArrival;
-    const auto sourceCadenceFloor = subtractPresentationWait
-        ? std::optional{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(1.0 / baseFpsCap)
-          )}
-        : std::nullopt;
+    const auto sourceCadenceFloor =
+        this->privateOrderedTransport &&
+                this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
+                baseFpsCap > 0.0
+            ? std::optional{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / baseFpsCap)
+              )}
+            : std::nullopt;
     auto sourceLimiterDeadline = this->realFramePacer.schedule(
         pacingArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
     );
@@ -736,7 +760,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // their acquire semaphores. A fence-budget miss must leave no new image
     // held by this plan when it falls back to native presentation.
     const auto renderFenceStarted = startPresentDiagnostic();
+    const auto rendererFenceWaitStarted = DiagnosticsClock::now();
     const bool renderFenceReady = this->prepareRenderFence(vk);
+    this->recordRendererBlockingDuration(
+        DiagnosticsClock::now() - rendererFenceWaitStarted
+    );
     plan.renderFenceWaitDuration = finishPresentDiagnostic(
         renderFenceStarted
     );
