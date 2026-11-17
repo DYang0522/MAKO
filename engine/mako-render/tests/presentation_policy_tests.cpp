@@ -30,6 +30,44 @@ namespace {
         std::exit(1);
     }
 
+    void testRendererAcquireWaitDoesNotDriftSourceCadence() {
+        using Clock = std::chrono::steady_clock;
+        const auto origin = Clock::time_point{} + std::chrono::hours(100000);
+        const std::array rendererWaits{
+            0ms, 16ms, 16667us, 8ms, 23ms, 1ms, 16667us, 5ms,
+        };
+
+        // Model a game clock whose source frames remain evenly spaced while
+        // MAKO blocks the application between calls. The raw wall-clock
+        // arrival includes the preceding renderer wait; the canonical source
+        // timestamp must remove exactly that wait, without cumulative drift.
+        for (const double sourceFps : {30.0, 29.0}) {
+            const auto interval = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(1.0 / sourceFps)
+            );
+            std::optional<Clock::time_point> previous;
+            for (size_t frame = 0; frame < 1200; ++frame) {
+                const auto sourceFrameAt = origin + interval *
+                    static_cast<int64_t>(frame);
+                const auto wait = rendererWaits[frame % rendererWaits.size()];
+                const auto wallClockArrival = sourceFrameAt + wait;
+                const auto cadence = sourceCadenceTime(wallClockArrival, wait);
+                expect(cadence == sourceFrameAt,
+                    "renderer acquire wait remained in the source timestamp");
+                if (previous)
+                    expect(cadence - *previous == interval,
+                        "renderer acquire waits accumulated source-cadence drift");
+                previous = cadence;
+            }
+        }
+
+        const auto observed = origin + 10ms;
+        expect(sourceCadenceTime(observed, std::nullopt) == observed &&
+                sourceCadenceTime(observed, 0ms) == observed &&
+                sourceCadenceTime(observed, -1ms) == observed,
+            "an absent, zero or negative renderer wait changed source time");
+    }
+
     void testSmoothCadenceCapFollowsActivePlan() {
         const SmoothCadenceBaseCap::TimePoint start{};
         for (const uint32_t target : {60U, 90U, 120U, 144U}) {
@@ -1972,6 +2010,7 @@ int main() {
             "disabling a governed cap releases the source immediately");
     }
 
+    testRendererAcquireWaitDoesNotDriftSourceCadence();
     testLongSessionDeadlineBounds();
     testFractionalUsesExistingSourceDeadline();
     testFixedUsesExistingSourceDeadline();
