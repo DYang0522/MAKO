@@ -312,6 +312,7 @@ namespace mako::layer {
             // Renderer-owned acquire blocking from the preceding present;
             // excluded from the source interval passed to the FG backend.
             std::optional<std::chrono::steady_clock::duration> sourceCadenceWait;
+            std::optional<std::chrono::steady_clock::duration> sourceCadenceFloor;
             mutable std::chrono::steady_clock::time_point started;
             // Fractional may spend the existing cap wait preparing generated
             // outputs. Every real-frame/fallback path retains this deadline.
@@ -374,7 +375,9 @@ namespace mako::layer {
             [[nodiscard]] std::chrono::nanoseconds backendSourceInterval(
                     const std::chrono::steady_clock::time_point cadence,
                     const std::optional<std::chrono::steady_clock::duration>
-                        rendererWait = std::nullopt) const {
+                        rendererWait = std::nullopt,
+                    const std::optional<std::chrono::steady_clock::duration>
+                        minimumInterval = std::nullopt) const {
                 if (!this->backendSourceCadence ||
                         cadence <= *this->backendSourceCadence)
                     return {};
@@ -382,10 +385,13 @@ namespace mako::layer {
                 // The previous vkPresent call may have blocked while waiting
                 // for MAKO-owned generated swapchain images. That wait is not
                 // part of the game's source-frame interval.
-                if (rendererWait && *rendererWait > interval)
-                    return {};
                 if (rendererWait)
                     interval -= *rendererWait;
+                if (minimumInterval)
+                    interval = std::max(interval, *minimumInterval);
+                else
+                    interval = std::max(interval,
+                        std::chrono::steady_clock::duration::zero());
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(
                     interval
                 );
