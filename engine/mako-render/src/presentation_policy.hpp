@@ -17,6 +17,22 @@
 
 namespace mako::layer {
 
+    /// Map a wall-clock observation back to the application's source cadence
+    /// by excluding time spent blocked in MAKO-owned generated-image acquires.
+    /// Callers retain wall time for resource lifetime, GPU synchronization and
+    /// diagnostics; only source-cadence consumers use this adjusted timestamp.
+    [[nodiscard]] inline std::chrono::steady_clock::time_point
+    sourceCadenceTime(
+            const std::chrono::steady_clock::time_point observedAt,
+            const std::optional<std::chrono::steady_clock::duration>
+                rendererAcquireWait) noexcept {
+        if (!rendererAcquireWait ||
+                *rendererAcquireWait <=
+                    std::chrono::steady_clock::duration::zero())
+            return observedAt;
+        return observedAt - *rendererAcquireWait;
+    }
+
     /// Explicit Gamescope presentation state published on the verified
     /// server-zero root. Keep the Steam preference, connector capability and
     /// compositor-active feedback separate: an overlay may temporarily stop
