@@ -74,7 +74,9 @@ bool Swapchain::resetGenerationScheduler(
         },
         &present_diagnostics::adaptiveScheduler()
     );
-    this->adaptiveScheduler->beginStabilization(now, reason);
+    this->adaptiveScheduler->beginStabilization(
+        this->sourceCadenceClock.toSourceTime(now), reason
+    );
     this->recoveryState.historyWarmupRemaining = 0;
     return true;
 }
@@ -99,7 +101,9 @@ void Swapchain::applyGamescopeFocus(const DiagnosticsClock::time_point now) {
                 now, "configuration-update-after-gamescope-return"
             ));
         } else if (this->adaptiveScheduler) {
-            this->adaptiveScheduler->resumeAfterExternalInterruption(now, returned);
+            this->adaptiveScheduler->resumeAfterExternalInterruption(
+                this->sourceCadenceClock.toSourceTime(now), returned
+            );
         }
         this->ensureHistoryWarmup(true);
         this->fixedRefreshBudget.reset();
@@ -444,7 +448,10 @@ ProfileUpdateDecision Swapchain::updateProfile(
          fractionalPriorityStyleChanged);
     if (decision.gpuHeadroomChanged && plan.appliedProfile.gpu_headroom_percent == 0 &&
             this->gpuHeadroomResult.capFps > 0 && plan.appliedProfile.adaptive && this->adaptiveScheduler)
-        this->adaptiveScheduler->requestHeadroomRecovery(DiagnosticsClock::now(), this->gpuHeadroom.sourceCeilingFps());
+        this->adaptiveScheduler->requestHeadroomRecovery(
+            this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now()),
+            this->gpuHeadroom.sourceCeilingFps()
+        );
     if (decision.gpuHeadroomChanged || decision.generationModeChanged ||
             decision.baseFpsCapChanged || decision.generationPolicyChanged || enabling || disabling) {
         this->gpuHeadroom.reset();
@@ -562,7 +569,7 @@ ProfileUpdateDecision Swapchain::updateProfile(
     } else if (decision.dynamicCadenceProbeIntervalChanged &&
             this->adaptiveScheduler) {
         this->adaptiveScheduler->updateDynamicCadenceProbeInterval(
-            profileUpdateNow,
+            this->sourceCadenceClock.toSourceTime(profileUpdateNow),
             ls::dynamicCadenceProbeIntervalDuration(
                 this->profile.dynamic_cadence_probe_interval_seconds
             )
@@ -829,7 +836,7 @@ void Swapchain::updateGamescopePresentationFeedback(
             this->recoveryState.orderedAcquireRecovery.active(),
             this->gamescopeRefreshHz, previous, feedback)) {
         static_cast<void>(this->adaptiveScheduler->refreshHigherLoadRetry(
-            DiagnosticsClock::now()));
+            this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now())));
     }
     const auto schedulerSnapshot = this->adaptiveScheduler
         ? this->adaptiveScheduler->snapshot()
