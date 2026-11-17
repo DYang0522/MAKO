@@ -230,7 +230,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     const auto presentationWait =
         std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
     const auto sourceCadenceArrival =
-        this->sourceCadenceClock.toSourceTime(limiterArrival);
+        this->sourceTimeAt(limiterArrival);
     this->applyGamescopeFocus(limiterArrival);
     const bool ownedTimingControlsOutput = this->presentTiming.controlsOutput(
         this->gamescopeRefreshHz.value_or(0));
@@ -265,7 +265,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                 (this->gpuHeadroomResult.state == "within-budget" ||
                  this->gpuHeadroomResult.state == "telemetry-unavailable"))
             this->adaptiveScheduler->requestHeadroomRecovery(
-                this->sourceCadenceClock.toSourceTime(headroomNow),
+                this->sourceTimeAt(headroomNow),
                 previousHeadroomCeiling
             );
         if (previousHeadroom.state != this->gpuHeadroomResult.state)
@@ -486,7 +486,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     }
     // The real-frame pacer operates on source time. Translate its deadline
     // back to wall time for sleeps, output submission and application return.
-    auto limiterDeadline = this->sourceCadenceClock.toWallTime(
+    auto limiterDeadline = this->wallTimeAt(
         sourceLimiterDeadline
     );
     auto sourceRefreshHz = this->gamescopeRefreshHz;
@@ -538,7 +538,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // Wall-clock samples above remain untouched for resource and diagnostic
     // timing; the limiter deadline is already derived from sourceCadenceArrival.
     const auto sourceCadenceNow =
-        this->sourceCadenceClock.toSourceTime(presentNow);
+        this->sourceTimeAt(presentNow);
     const auto cadenceNow = sourceDeadlinePreparation
         ? std::max(sourceLimiterDeadline, sourceCadenceNow)
         : sourceCadenceNow;
@@ -974,13 +974,13 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         // timestamps its plan already spaced across this source interval.
         if (!plan.historyWarmupActive && plan.scheduledGeneratedFrames.size() ==
                 plan.requestedGeneratedFrames.size()) {
-            const auto sourceReadyAt = this->sourceCadenceClock.toSourceTime(
+            const auto sourceReadyAt = this->sourceTimeAt(
                 DiagnosticsClock::now());
             const auto sourceOutputs = this->sourceIntervalSpacing.schedule(
                 sourceReadyAt, plan.scheduledGeneratedFrames.size() + 1);
             if (sourceOutputs) {
                 invocation.pacedOutputs = RealFramePacer::OutputBatch{
-                    this->sourceCadenceClock.toWallTime(sourceOutputs->first),
+                    this->wallTimeAt(sourceOutputs->first),
                     sourceOutputs->interval,
                     sourceOutputs->count,
                 };
