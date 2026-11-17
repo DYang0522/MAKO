@@ -55,6 +55,10 @@ namespace mako::layer {
         // application has not selected its own timing-feedback namespace.
         bool gamescopeDisplayTiming{false};
         bool ownedPresentTiming{false};
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+        bool ownedPresentTimingAbsolute{false};
+        VkPresentStageFlagsEXT ownedPresentStageQueries{0};
+#endif
         // Any Gamescope signal at creation. Without one, a desktop compositor
         // may need MAKO to space generated outputs itself.
         bool gamescopeSession{false};
@@ -305,6 +309,10 @@ namespace mako::layer {
             uint32_t imageIndex;
             std::span<const VkSemaphore> waitSemaphores;
             std::chrono::steady_clock::time_point cadenceStarted;
+            // Renderer-owned acquire blocking from the preceding present;
+            // excluded from the source interval passed to the FG backend.
+            std::optional<std::chrono::steady_clock::duration> sourceCadenceWait;
+            std::optional<std::chrono::steady_clock::duration> sourceCadenceFloor;
             mutable std::chrono::steady_clock::time_point started;
             // Fractional may spend the existing cap wait preparing generated
             // outputs. Every real-frame/fallback path retains this deadline.
@@ -365,12 +373,27 @@ namespace mako::layer {
                 backendSourceCadence;
 
             [[nodiscard]] std::chrono::nanoseconds backendSourceInterval(
-                    const std::chrono::steady_clock::time_point cadence) const {
+                    const std::chrono::steady_clock::time_point cadence,
+                    const std::optional<std::chrono::steady_clock::duration>
+                        rendererWait = std::nullopt,
+                    const std::optional<std::chrono::steady_clock::duration>
+                        minimumInterval = std::nullopt) const {
                 if (!this->backendSourceCadence ||
                         cadence <= *this->backendSourceCadence)
                     return {};
+                auto interval = cadence - *this->backendSourceCadence;
+                // The previous vkPresent call may have blocked while waiting
+                // for MAKO-owned generated swapchain images. That wait is not
+                // part of the game's source-frame interval.
+                if (rendererWait)
+                    interval -= *rendererWait;
+                if (minimumInterval)
+                    interval = std::max(interval, *minimumInterval);
+                else
+                    interval = std::max(interval,
+                        std::chrono::steady_clock::duration::zero());
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    cadence - *this->backendSourceCadence
+                    interval
                 );
             }
         };

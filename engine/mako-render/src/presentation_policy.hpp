@@ -1095,7 +1095,8 @@ namespace mako::layer {
                 const double outputFps, const double refreshFps,
                 const size_t outputBatchSize = 1,
                 const bool generationEnabled = true,
-                const std::optional<TimePoint> sourceDeadline = std::nullopt) {
+                const std::optional<TimePoint> sourceDeadline = std::nullopt,
+                const bool readinessFeedbackAvailable = true) {
             if (!validRate(outputFps) || !validRate(refreshFps) ||
                     outputBatchSize == 0 ||
                     outputBatchSize > GeneratedFramePlan::capacity + 1)
@@ -1134,7 +1135,9 @@ namespace mako::layer {
             const auto measuredReadiness = this->readinessCount
                 ? *std::max_element(this->readiness.begin(),
                     this->readiness.begin() + this->readinessCount)
-                : std::min(4 * refreshPeriod, Clock::duration(maximumReadiness));
+                : std::min(readinessFeedbackAvailable
+                    ? 4 * refreshPeriod : refreshPeriod,
+                    Clock::duration(maximumReadiness));
             // A threaded presentation waiter releases source credit while
             // another batch is pending. Its deadlines already reserve those
             // slots; a second refresh of lead consumes the next frame's work
@@ -1891,6 +1894,19 @@ namespace mako::layer {
         PresentationWaitWindow window;
         size_t holds{0};
     };
+
+    /// The capped backlog drain needs blocking private acquires as queue
+    /// evidence and a CPU source cap that owns real-frame release. The ordered
+    /// SDR transport provides both. The HDR transport never blocks an acquire,
+    /// and the scaling bridge and owned display timing pace outputs in the
+    /// compositor with their own queue reserve. A Zink acquire window keeps
+    /// the drain wherever it applies.
+    [[nodiscard]] constexpr bool cappedFifoBacklogDrainApplies(
+            const bool applicationAcquireWindow, const bool privateOrderedTransport,
+            const bool compositorOutputTiming) noexcept {
+        return applicationAcquireWindow ||
+            (privateOrderedTransport && !compositorOutputTiming);
+    }
 
     /// Zink only: under an ordered-FIFO handoff, a source faster than the
     /// rung's admission rate waits on presentation and fills FIFO. Its rate

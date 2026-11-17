@@ -18,7 +18,15 @@ namespace mako::layer {
         using Clock = OrderedPresentTimeline::Clock;
         using TimePoint = OrderedPresentTimeline::TimePoint;
         static constexpr uint32_t capacity = 64;
-        static constexpr auto queueStage = VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT;
+        static constexpr size_t maxPresentStages = 2;
+        static constexpr VkPresentStageFlagsEXT queueStage =
+            VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT;
+        static constexpr VkPresentStageFlagsEXT pixelOutStage =
+            VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+        static constexpr VkPresentStageFlagsEXT pixelVisibleStage =
+            VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT;
+        static constexpr VkPresentStageFlagsEXT supportedStages =
+            queueStage | pixelOutStage | pixelVisibleStage;
 
         struct Functions {
             PFN_vkSetSwapchainPresentTimingQueueSizeEXT setSize{};
@@ -41,18 +49,37 @@ namespace mako::layer {
             return true;
         }
 
+        // Feedback and absolute scheduling are independent surface capabilities.
+        // Mesa Wayland can report IMAGE_FIRST_PIXEL_OUT while lacking commit-timing
+        // support for absolute presentation targets.
         [[nodiscard]] static bool surfaceSupported(
                 const VkPresentTimingSurfaceCapabilitiesEXT& timing,
                 const VkSurfaceCapabilitiesPresentId2KHR& ids) {
             return ids.presentId2Supported && timing.presentTimingSupported &&
-                timing.presentAtAbsoluteTimeSupported && (timing.presentStageQueries & queueStage);
+                (timing.presentStageQueries & supportedStages) != 0;
         }
 
         bool initialize(const VkDevice device, const VkSwapchainKHR swapchain,
-                const Functions functions) {
+                const Functions functions, const bool absoluteTimeSupported = true,
+                const VkPresentStageFlagsEXT surfaceStages = queueStage) {
             this->device = device;
             this->swapchain = swapchain;
             this->functions = functions;
+            this->absoluteTimeSupported = absoluteTimeSupported;
+            const auto availableStages = surfaceStages & supportedStages;
+            this->queueStageAvailable = (availableStages & queueStage) != 0;
+            if (availableStages & pixelVisibleStage)
+                this->feedbackStage = pixelVisibleStage;
+            else if (availableStages & pixelOutStage)
+                this->feedbackStage = pixelOutStage;
+            else if (this->queueStageAvailable)
+                this->feedbackStage = queueStage;
+            else
+                return false;
+            this->outputFeedbackAvailable =
+                this->feedbackStage == pixelVisibleStage ||
+                this->feedbackStage == pixelOutStage;
+
             this->enabled = functions.setSize && functions.properties &&
                 functions.domains && functions.past && functions.calibrate;
             if (!this->enabled)
@@ -67,6 +94,11 @@ namespace mako::layer {
         [[nodiscard]] bool controlsOutput(const double fallbackRefresh = 0) const {
             return this->enabled && this->mode == VK_PRESENT_MODE_FIFO_KHR &&
                 OrderedPresentTimeline::validRate(this->refreshRate(fallbackRefresh));
+        }
+        [[nodiscard]] bool readinessFeedbackAvailable() const {
+            return this->queueStageAvailable &&
+                (this->feedbackStage == queueStage ||
+                 this->domain != VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT);
         }
         void observePresentMode(const void* chain) {
             for (auto* node = static_cast<const VkBaseInStructure*>(chain); node; node = node->pNext) {
@@ -97,10 +129,11 @@ namespace mako::layer {
                 return;
             this->lastBatch = batch;
             std::array<VkPastPresentationTimingEXT, capacity> records{};
-            std::array<VkPresentStageTimeEXT, capacity> stages{};
+            std::array<VkPresentStageTimeEXT, capacity * maxPresentStages> stages{};
             for (size_t i = 0; i < records.size(); ++i)
                 records[i] = {VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_EXT,
-                    nullptr, 0, 0, 1, &stages[i], {}, 0, VK_FALSE};
+                    nullptr, 0, 0, static_cast<uint32_t>(maxPresentStages),
+                    &stages[i * maxPresentStages], {}, 0, VK_FALSE};
             VkPastPresentationTimingPropertiesEXT result{
                 .sType = VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_PROPERTIES_EXT,
                 .presentationTimingCount = capacity,
@@ -124,14 +157,33 @@ namespace mako::layer {
                 if (!record.presentId || slot == this->pendingIds.end() || !record.reportComplete)
                     continue;
                 const auto offset = this->pendingOffsets[static_cast<size_t>(slot - this->pendingIds.begin())];
+                TimePoint queueEnd{}, outputAt{};
+                const bool validDomain =
+                    result.timeDomainsCounter == this->domainCounter &&
+                    record.timeDomain == this->domain &&
+                    record.timeDomainId == this->domainId;
+                if (validDomain) {
+                    for (uint32_t stageIndex = 0;
+                            stageIndex < std::min(record.presentStageCount,
+                                static_cast<uint32_t>(maxPresentStages));
+                            ++stageIndex) {
+                        const auto& stage = record.pPresentStages[stageIndex];
+                        if (!stage.time)
+                            continue;
+                        const auto sampledAt = this->fromDomain(stage.time, offset);
+                        if (stage.stage == queueStage)
+                            queueEnd = sampledAt;
+                        if (this->outputFeedbackAvailable &&
+                                stage.stage == this->feedbackStage)
+                            outputAt = sampledAt;
+                    }
+                }
                 *slot = 0;
                 --this->pendingCount;
-                TimePoint queueEnd{};
-                if (result.timeDomainsCounter == this->domainCounter &&
-                        record.timeDomain == this->domain && record.timeDomainId == this->domainId &&
-                        record.presentStageCount == 1 && stages[i].stage == queueStage)
-                    queueEnd = this->fromDomain(stages[i].time, offset);
-                timeline.feedbackTiming(record.presentId, queueEnd, now);
+                // Pixel-out/visible feedback remains useful when the WSI cannot
+                // schedule absolute targets. It lets the shared FIFO timeline
+                // detect a persistent whole-refresh backlog and realign itself.
+                timeline.feedbackTiming(record.presentId, queueEnd, now, outputAt);
             }
             if (result.timeDomainsCounter != this->domainCounter ||
                     now - this->lastCalibration >= std::chrono::seconds(1)) {
@@ -149,34 +201,45 @@ namespace mako::layer {
             }
         }
 
-        /// The caller keeps these structs alive through the lower present.
-        /// IDs remain monotonic for the whole swapchain, including fallbacks.
+        /// Keep software pacing in charge when absolute targets are unavailable.
+        /// targetTime=0 requests ASAP presentation while still asking WSI for
+        /// actual output-stage timestamps.
         bool prepare(const TimePoint target, OrderedPresentTimeline& timeline,
                 VkPresentTimingInfoEXT& timing, uint64_t& id) {
             if (!this->enabled || this->nextId == UINT64_MAX)
                 return false;
-            const auto stamp = this->toDomain(target);
-            if (!stamp)
+            const auto stamp = this->absoluteTimeSupported ? this->toDomain(target) : 0;
+            if (this->absoluteTimeSupported && !stamp)
                 return false;
             id = ++this->nextId;
             timing = {
                 .sType = VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT,
                 .targetTime = stamp,
                 .timeDomainId = this->domainId,
-                .targetTimeDomainPresentStage = queueStage,
+                .targetTimeDomainPresentStage = this->feedbackStage,
             };
             if (this->pendingCount < capacity) {
                 const auto slot = std::ranges::find(this->pendingIds, uint64_t{0});
                 this->pendingOffsets[static_cast<size_t>(slot - this->pendingIds.begin())] = this->offset;
                 *slot = id;
                 ++this->pendingCount;
-                timing.presentStageQueries = queueStage;
+                timing.presentStageQueries = this->stageQueriesForCurrentDomain();
                 timeline.submittedTiming(id, target, Clock::now());
             }
             return true;
         }
 
     private:
+        [[nodiscard]] VkPresentStageFlagsEXT stageQueriesForCurrentDomain() const {
+            VkPresentStageFlagsEXT stages = this->feedbackStage;
+            // Stage-local clocks are calibrated against feedbackStage and cannot
+            // safely describe a second, different stage in the same time domain.
+            if (this->queueStageAvailable && this->feedbackStage != queueStage &&
+                    this->domain != VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT)
+                stages |= queueStage;
+            return stages;
+        }
+
         static double rate(const uint64_t duration) {
             return duration >= 1'000'000 && duration <= 1'000'000'000
                 ? 1e9 / static_cast<double>(duration) : 0;
@@ -219,7 +282,9 @@ namespace mako::layer {
                 const VkSwapchainCalibratedTimestampInfoEXT swapchainInfo{
                     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT,
                     .swapchain = this->swapchain,
-                    .presentStage = queueStage,
+                    .presentStage = domains[i] ==
+                            VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT
+                        ? this->feedbackStage : VkPresentStageFlagsEXT{0},
                     .timeDomainId = ids[i],
                 };
                 const VkCalibratedTimestampInfoKHR info{
@@ -270,6 +335,10 @@ namespace mako::layer {
         Functions functions;
         bool enabled{};
         VkPresentModeKHR mode{VK_PRESENT_MODE_FIFO_KHR};
+        bool absoluteTimeSupported{};
+        bool queueStageAvailable{};
+        bool outputFeedbackAvailable{};
+        VkPresentStageFlagsEXT feedbackStage{};
         VkTimeDomainKHR domain{};
         uint64_t domainId{}, domainCounter{};
         std::optional<uint64_t> propertiesCounter;
@@ -281,6 +350,7 @@ namespace mako::layer {
         std::array<int64_t, capacity> pendingOffsets{};
         uint32_t pendingCount{};
     };
+
 #else
     class OwnedPresentTiming {
     public:

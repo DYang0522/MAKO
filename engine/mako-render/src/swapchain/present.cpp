@@ -119,9 +119,13 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             .domains = reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(get("vkGetSwapchainTimeDomainPropertiesEXT")),
             .past = reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(get("vkGetPastPresentationTimingEXT")),
             .calibrate = reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(get("vkGetCalibratedTimestampsKHR")),
-        });
+        }, this->info.ownedPresentTimingAbsolute,
+            this->info.ownedPresentStageQueries);
         std::clog << "MAKO Renderer: presentation timing initialized; owner=renderer; "
-                     "transport=VK_EXT_present_timing; active=" << enabled << '\n';
+                     "transport=VK_EXT_present_timing; active=" << enabled
+                  << "; absolute=" << this->info.ownedPresentTimingAbsolute
+                  << "; feedback_stages=0x" << std::hex
+                  << this->info.ownedPresentStageQueries << std::dec << '\n';
     }
     const bool hadPresentTiming = this->presentTiming.active();
     this->presentTiming.update(this->wsiPresentTimeline, this->frameState.realFrameIndex);
@@ -197,6 +201,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         this->gamescopeDetected && !this->privateOrderedTransport;
 
     const auto limiterArrival = DiagnosticsClock::now();
+    // A generated-image acquire can block the application inside the previous
+    // present call. Do not let that renderer-owned wait masquerade as a slower
+    // source cadence for the fixed-rate limiter or frame-generation backend.
+    const auto presentationWait =
+        std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
     this->applyGamescopeFocus(limiterArrival);
     const bool ownedTimingControlsOutput = this->presentTiming.controlsOutput(
         this->gamescopeRefreshHz.value_or(0));
@@ -344,14 +353,12 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         );
     if (this->gpuHeadroomResult.capFps > 0)
         handoffGenerationLimit.reset();
-    // Zink's worker-thread presents expose a full FIFO queue as waits on
-    // MAKO's own generated-image acquires. Other engines never read them.
-    const auto presentationWait = this->info.applicationAcquireWindow
-        ? std::exchange(this->lastGeneratedAcquireWait, std::nullopt)
-        : std::nullopt;
+    // A full FIFO queue shows as waits on MAKO's own generated-image
+    // acquires. Only Zink's worker-thread presents also end a handoff on them.
     const auto handoff = this->smoothCadencePacerHandoff.update(
         limiterArrival, handoffGenerationLimit, plannedVrrProbePause || zinkPacesAdaptive,
-        this->gamescopeRefreshHz, presentationWait
+        this->gamescopeRefreshHz,
+        this->info.applicationAcquireWindow ? presentationWait : std::nullopt
     );
     if (handoff.changed) {
         this->realFramePacer.reset();
@@ -410,10 +417,22 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     if (this->gpuHeadroomResult.capFps > 0)
         baseFpsCap = baseFpsCap > 0 ? std::min(baseFpsCap, this->gpuHeadroomResult.capFps)
             : this->gpuHeadroomResult.capFps;
+    const bool subtractPresentationWait =
+        baseFpsCap > 0.0 && this->privateOrderedTransport &&
+        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
+        presentationWait && *presentationWait > DiagnosticsClock::duration::zero();
+    const auto pacingArrival = subtractPresentationWait
+        ? limiterArrival - *presentationWait : limiterArrival;
+    const auto sourceCadenceFloor = subtractPresentationWait
+        ? std::optional{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / baseFpsCap)
+          )}
+        : std::nullopt;
     auto limiterDeadline = this->realFramePacer.schedule(
-        limiterArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
+        pacingArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
     );
-    if (this->info.applicationAcquireWindow) {
+    if (cappedFifoBacklogDrainApplies(this->info.applicationAcquireWindow,
+            this->privateOrderedTransport, compositorOutputTiming)) {
         const auto drain = this->cappedFifoBacklogDrain.observe(
             limiterArrival, baseFpsCap, this->gamescopeRefreshHz,
             presentationWait
@@ -435,6 +454,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                  << " refresh_hz=" << this->gamescopeRefreshHz.value_or(0) << '\n';
             std::cerr << line.str();
         }
+    } else {
+        this->cappedFifoBacklogDrain.reset();
     }
     auto sourceRefreshHz = this->gamescopeRefreshHz;
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
@@ -493,6 +514,9 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         .imageIndex = imageIndex,
         .waitSemaphores = waitSemaphores,
         .cadenceStarted = cadenceNow,
+        .sourceCadenceWait = subtractPresentationWait
+            ? presentationWait : std::nullopt,
+        .sourceCadenceFloor = sourceCadenceFloor,
         .started = startPresentDiagnostic(),
         .originalPresentDeadline = sourceDeadlinePacing
             ? std::optional{limiterDeadline} : std::nullopt,
@@ -840,7 +864,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             this->instance->scheduleFrames(
                 this->ctx.get(), plan.scheduledGeneratedFrames.timestamps(),
                 this->frameState.backendSourceInterval(
-                    invocation.cadenceStarted
+                    invocation.cadenceStarted, invocation.sourceCadenceWait,
+                    invocation.sourceCadenceFloor
                 )
             );
         } catch (const std::exception& error) {
