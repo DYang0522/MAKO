@@ -17,21 +17,39 @@
 
 namespace mako::layer {
 
-    /// Map a wall-clock observation back to the application's source cadence
-    /// by excluding time spent blocked in MAKO-owned generated-image acquires.
-    /// Callers retain wall time for resource lifetime, GPU synchronization and
-    /// diagnostics; only source-cadence consumers use this adjusted timestamp.
-    [[nodiscard]] inline std::chrono::steady_clock::time_point
-    sourceCadenceTime(
-            const std::chrono::steady_clock::time_point observedAt,
-            const std::optional<std::chrono::steady_clock::duration>
-                rendererAcquireWait) noexcept {
-        if (!rendererAcquireWait ||
-                *rendererAcquireWait <=
-                    std::chrono::steady_clock::duration::zero())
-            return observedAt;
-        return observedAt - *rendererAcquireWait;
-    }
+    /// Maintains one continuous source-time axis while excluding MAKO-owned
+    /// blocking waits. Source-time deadlines are translated back to wall time
+    /// before any sleep or Vulkan presentation operation.
+    class SourceCadenceClock {
+    public:
+        using Clock = std::chrono::steady_clock;
+        using TimePoint = Clock::time_point;
+        using Duration = Clock::duration;
+
+        [[nodiscard]] TimePoint advance(const TimePoint wallNow,
+                const std::optional<Duration> rendererWait) noexcept {
+            if (rendererWait && *rendererWait > Duration::zero())
+                this->excludedWait += *rendererWait;
+            return this->toSourceTime(wallNow);
+        }
+
+        [[nodiscard]] TimePoint toSourceTime(
+                const TimePoint wallTime) const noexcept {
+            return wallTime - this->excludedWait;
+        }
+
+        [[nodiscard]] TimePoint toWallTime(
+                const TimePoint sourceTime) const noexcept {
+            return sourceTime + this->excludedWait;
+        }
+
+        [[nodiscard]] Duration excludedDuration() const noexcept {
+            return this->excludedWait;
+        }
+
+    private:
+        Duration excludedWait{};
+    };
 
     /// Explicit Gamescope presentation state published on the verified
     /// server-zero root. Keep the Steam preference, connector capability and
