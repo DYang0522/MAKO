@@ -16,6 +16,10 @@ SYSTEM_PYTHON_SUPPORTED = subprocess.run(
     ['/usr/bin/python3', '-I', '-c', "import tomllib, hashlib; assert hasattr(hashlib, 'file_digest')"],
     capture_output=True, timeout=5).returncode == 0
 
+# Keep the native test client executable name-independent. Ubuntu 26.04's
+# uutils /usr/bin/env rejects execution after the Steam backup renames it.
+NATIVE_ENV_ARGS = ('-c', 'exec /usr/bin/env -0')
+
 
 class RemotePlayCommandTests(unittest.TestCase):
     def setUp(self):
@@ -75,14 +79,14 @@ class RemotePlayCommandTests(unittest.TestCase):
         self.assertEqual(0o750, self.client.stat().st_mode & 0o7777)
 
     def test_standalone_shader_launch_and_custom_config_are_used(self):
-        self.client.write_bytes(Path('/usr/bin/env').read_bytes())
+        self.client.write_bytes(Path('/bin/sh').read_bytes())
         config = self.home / 'other config/conf.toml'
         config.parent.mkdir()
         config.write_text(self.config.read_text())
         settings = {'version': 1, 'profiles': {'stream-quality': {'external_vulkan_layer': 'vkbasalt'}}}
         (config.parent / 'profile-wrapper-settings.json').write_text(json.dumps(settings))
         self.command('install', config=config)
-        result = subprocess.run([str(self.client), '-0'], env=self.environment, capture_output=True, timeout=5)
+        result = subprocess.run([str(self.client), *NATIVE_ENV_ARGS], env=self.environment, capture_output=True, timeout=5)
         self.assertEqual(0, result.returncode, result.stderr.decode())
         values = dict(item.decode().split('=', 1) for item in result.stdout.split(b'\0') if item)
         self.assertEqual(str(config), values['MAKO_CONFIG'])
@@ -101,7 +105,7 @@ class RemotePlayCommandTests(unittest.TestCase):
         self.command('refresh')
         self.assertEqual(before, self.client.read_bytes())
         self.command('restore-before-uninstall')
-        self.assertEqual(Path('/usr/bin/env').read_bytes(), self.client.read_bytes())
+        self.assertEqual(Path('/bin/sh').read_bytes(), self.client.read_bytes())
 
     def test_conflicts_leave_client_untouched(self):
         backup = self.client.with_name('streaming_client.mako-original')
@@ -129,7 +133,7 @@ class RemotePlayCommandTests(unittest.TestCase):
         self.command('remove')
 
     def test_real_standalone_launcher_uses_current_shader_settings(self):
-        self.client.write_bytes(Path('/usr/bin/env').read_bytes())
+        self.client.write_bytes(Path('/bin/sh').read_bytes())
         shutil.copyfile(ROOT / 'mako-launch', self.launcher)
         # Native config overrides must not change the standalone owner's global
         # launcher.conf discovery. Its ALSA setting still applies; Zink does not.
@@ -156,7 +160,7 @@ class RemotePlayCommandTests(unittest.TestCase):
             (self.config.parent / 'profile-wrapper-settings.json').write_text(json.dumps(settings))
             self.command('remove')
             self.command('install')
-            result = subprocess.run([str(self.client), '-0'], env=self.environment, capture_output=True, timeout=5)
+            result = subprocess.run([str(self.client), *NATIVE_ENV_ARGS], env=self.environment, capture_output=True, timeout=5)
             self.assertEqual(0, result.returncode, result.stderr.decode())
             values = dict(item.decode().split('=', 1) for item in result.stdout.split(b'\0') if item)
             self.assertEqual('stream-quality', values['MAKO_PROFILE'])
@@ -184,7 +188,7 @@ class RemotePlayCommandTests(unittest.TestCase):
                     {'version': 1, 'profiles': {'mako': {'external_vulkan_layer': 'vkbasalt'}}}))
                 self.command('remove')
                 self.command('install')
-                result = subprocess.run([str(self.client), '-0'], env=self.environment,
+                result = subprocess.run([str(self.client), *NATIVE_ENV_ARGS], env=self.environment,
                                         capture_output=True, timeout=5)
                 self.assertEqual(0, result.returncode, result.stderr.decode())
                 values = dict(item.decode().split('=', 1) for item in result.stdout.split(b'\0') if item)
