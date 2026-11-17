@@ -214,7 +214,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
         presentationWait &&
         *presentationWait > DiagnosticsClock::duration::zero();
-    const auto sourceCadenceArrival = sourceCadenceTime(
+    const auto sourceCadenceArrival = this->sourceCadenceClock.advance(
         limiterArrival,
         subtractPresentationWait ? presentationWait : std::nullopt
     );
@@ -435,7 +435,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             std::chrono::duration<double>(1.0 / baseFpsCap)
           )}
         : std::nullopt;
-    auto limiterDeadline = this->realFramePacer.schedule(
+    auto sourceLimiterDeadline = this->realFramePacer.schedule(
         pacingArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
     );
     if (cappedFifoBacklogDrainApplies(this->info.applicationAcquireWindow,
@@ -445,7 +445,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             presentationWait
         );
         if (drain.hold > DiagnosticsClock::duration::zero())
-            limiterDeadline = this->realFramePacer.hold(limiterDeadline, drain.hold);
+            sourceLimiterDeadline = this->realFramePacer.hold(
+                sourceLimiterDeadline, drain.hold);
         if ((drain.hold > DiagnosticsClock::duration::zero() || drain.suspended) &&
                 presentDiagnosticsEnabled()) {
             std::ostringstream line;
@@ -464,6 +465,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     } else {
         this->cappedFifoBacklogDrain.reset();
     }
+    // The real-frame pacer operates on source time. Translate its deadline
+    // back to wall time for sleeps, output submission and application return.
+    auto limiterDeadline = this->sourceCadenceClock.toWallTime(
+        sourceLimiterDeadline
+    );
     auto sourceRefreshHz = this->gamescopeRefreshHz;
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
     if (!sourceRefreshHz && ownedTimingControlsOutput) {
@@ -512,12 +518,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // scheduler planning, cadence observations and backend source intervals.
     // Wall-clock samples above remain untouched for resource and diagnostic
     // timing; the limiter deadline is already derived from sourceCadenceArrival.
-    const auto sourceCadenceNow = sourceCadenceTime(
-        presentNow,
-        subtractPresentationWait ? presentationWait : std::nullopt
-    );
+    const auto sourceCadenceNow =
+        this->sourceCadenceClock.toSourceTime(presentNow);
     const auto cadenceNow = sourceDeadlinePreparation
-        ? std::max(limiterDeadline, sourceCadenceNow) : sourceCadenceNow;
+        ? std::max(sourceLimiterDeadline, sourceCadenceNow)
+        : sourceCadenceNow;
     PresentInvocation invocation{
         .vk = vk,
         .queue = queue,
@@ -946,11 +951,19 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         // timestamps its plan already spaced across this source interval.
         if (!plan.historyWarmupActive && plan.scheduledGeneratedFrames.size() ==
                 plan.requestedGeneratedFrames.size()) {
-            invocation.pacedOutputs = this->sourceIntervalSpacing.schedule(
-                DiagnosticsClock::now(), plan.scheduledGeneratedFrames.size() + 1);
-            if (invocation.pacedOutputs)
+            const auto sourceReadyAt = this->sourceCadenceClock.toSourceTime(
+                DiagnosticsClock::now());
+            const auto sourceOutputs = this->sourceIntervalSpacing.schedule(
+                sourceReadyAt, plan.scheduledGeneratedFrames.size() + 1);
+            if (sourceOutputs) {
+                invocation.pacedOutputs = RealFramePacer::OutputBatch{
+                    this->sourceCadenceClock.toWallTime(sourceOutputs->first),
+                    sourceOutputs->interval,
+                    sourceOutputs->count,
+                };
                 invocation.originalPresentDeadline = invocation.pacedOutputs->at(
                     invocation.pacedOutputs->count - 1);
+            }
         }
     }
     if (bypassGeneratedFrames)
