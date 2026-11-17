@@ -280,7 +280,11 @@ int main() {
     OrderedPresentTimeline feedbackTimeline;
     const VkPresentStageFlagsEXT outputStage = OwnedPresentTiming::pixelOutStage;
     calibrationStage = outputStage;
-    interval = duration = 16'666'667;
+    const auto refreshPeriod = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / 60.0));
+    const auto refreshPeriodNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(refreshPeriod).count());
+    interval = duration = refreshPeriodNs;
     ++propertiesCounter;
     pastStatus = VK_SUCCESS;
     propertiesStatus = VK_SUCCESS;
@@ -298,7 +302,6 @@ int main() {
     mode = VK_PRESENT_MODE_FIFO_KHR;
     feedbackOnly.observePresentMode(&modes);
     const auto feedbackStart = Clock::now() + std::chrono::seconds(1);
-    const auto refreshPeriod = std::chrono::nanoseconds(16'666'667);
     bool realignmentObserved = false;
     for (uint64_t frame = 1; frame <= 7; ++frame) {
         const auto now = feedbackStart + refreshPeriod * static_cast<int64_t>((frame - 1) * 2);
