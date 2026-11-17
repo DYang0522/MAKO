@@ -194,6 +194,7 @@ VkResult Swapchain::presentGeneratedFrames(
             }
             const auto acquireDuration =
                 DiagnosticsClock::now() - acquireStarted;
+            this->recordRendererBlockingDuration(acquireDuration);
             maximumAcquireDuration = std::max(
                 maximumAcquireDuration, acquireDuration
             );
