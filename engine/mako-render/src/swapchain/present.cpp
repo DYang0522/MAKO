@@ -119,9 +119,13 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             .domains = reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(get("vkGetSwapchainTimeDomainPropertiesEXT")),
             .past = reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(get("vkGetPastPresentationTimingEXT")),
             .calibrate = reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(get("vkGetCalibratedTimestampsKHR")),
-        });
+        }, this->info.ownedPresentTimingAbsolute,
+            this->info.ownedPresentStageQueries);
         std::clog << "MAKO Renderer: presentation timing initialized; owner=renderer; "
-                     "transport=VK_EXT_present_timing; active=" << enabled << '\n';
+                     "transport=VK_EXT_present_timing; active=" << enabled
+                  << "; absolute=" << this->info.ownedPresentTimingAbsolute
+                  << "; feedback_stages=0x" << std::hex
+                  << this->info.ownedPresentStageQueries << std::dec << '\n';
     }
     const bool hadPresentTiming = this->presentTiming.active();
     this->presentTiming.update(this->wsiPresentTimeline, this->frameState.realFrameIndex);
@@ -344,14 +348,14 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         );
     if (this->gpuHeadroomResult.capFps > 0)
         handoffGenerationLimit.reset();
-    // Zink's worker-thread presents expose a full FIFO queue as waits on
-    // MAKO's own generated-image acquires. Other engines never read them.
-    const auto presentationWait = this->info.applicationAcquireWindow
-        ? std::exchange(this->lastGeneratedAcquireWait, std::nullopt)
-        : std::nullopt;
+    // A full FIFO queue shows as waits on MAKO's own generated-image
+    // acquires. Only Zink's worker-thread presents also end a handoff on them.
+    const auto presentationWait =
+        std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
     const auto handoff = this->smoothCadencePacerHandoff.update(
         limiterArrival, handoffGenerationLimit, plannedVrrProbePause || zinkPacesAdaptive,
-        this->gamescopeRefreshHz, presentationWait
+        this->gamescopeRefreshHz,
+        this->info.applicationAcquireWindow ? presentationWait : std::nullopt
     );
     if (handoff.changed) {
         this->realFramePacer.reset();
@@ -413,7 +417,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     auto limiterDeadline = this->realFramePacer.schedule(
         limiterArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
     );
-    if (this->info.applicationAcquireWindow) {
+    if (cappedFifoBacklogDrainApplies(this->info.applicationAcquireWindow,
+            this->privateOrderedTransport, compositorOutputTiming)) {
         const auto drain = this->cappedFifoBacklogDrain.observe(
             limiterArrival, baseFpsCap, this->gamescopeRefreshHz,
             presentationWait
@@ -435,6 +440,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
                  << " refresh_hz=" << this->gamescopeRefreshHz.value_or(0) << '\n';
             std::cerr << line.str();
         }
+    } else {
+        this->cappedFifoBacklogDrain.reset();
     }
     auto sourceRefreshHz = this->gamescopeRefreshHz;
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
