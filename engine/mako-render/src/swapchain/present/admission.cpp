@@ -166,7 +166,10 @@ Swapchain::PresentationFramePlan Swapchain::prepareFramePlan(
                 ? this->smoothCadencePacerHandoff.activeGenerationLimit()
                 : std::nullopt,
             integerBaseCapGenerationLimit,
-            this->orderedPresentationDeadline,
+            this->orderedPresentationDeadline
+                ? std::optional{this->sourceCadenceClock.toSourceTime(
+                    *this->orderedPresentationDeadline)}
+                : std::nullopt,
             this->gpuHeadroomResult.capFps,
             this->applicationLayerShare
         )
@@ -372,7 +375,8 @@ void Swapchain::handleGeneratedImageAdmissionPressure(
     if (adaptiveOrderedAdmissionMiss) {
         static_cast<void>(
             this->adaptiveScheduler->rejectActiveRampForTransportMiss(
-                this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now())
+                this->sourceCadenceClock.toSourceTime(DiagnosticsClock::now()) -
+                    this->currentRendererBlockingDuration
             )
         );
     }
@@ -414,7 +418,8 @@ void Swapchain::handleGeneratedImageAdmissionPressure(
         }
         this->recoveryState.generatedImageAdmission.reset();
         static_cast<void>(this->resetGenerationScheduler(
-            DiagnosticsClock::now(), "ordered-wsi-partial-admission"
+            DiagnosticsClock::now() - this->currentRendererBlockingDuration,
+            "ordered-wsi-partial-admission"
         ));
     }
     if (!this->adaptiveScheduler) {
