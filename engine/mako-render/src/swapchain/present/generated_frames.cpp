@@ -69,15 +69,18 @@ VkResult Swapchain::presentGeneratedFrames(
                 observedAt, timedOut, acquireDeadlineExceeded,
                 plan.boundedOrderedAcquireProbe
             );
+        const auto schedulerObservedAt =
+            this->sourceCadenceClock.toSourceTime(observedAt) -
+                this->currentRendererBlockingDuration;
         if (transitionRecoveryActive && (timedOut || budgetExhausted) &&
                 this->adaptiveScheduler) {
             static_cast<void>(this->adaptiveScheduler
-                ->rejectActiveRampForTransportMiss(observedAt));
+                ->rejectActiveRampForTransportMiss(schedulerObservedAt));
         }
         if (observation.recovered && transitionRecoveryActive &&
                 this->adaptiveScheduler) {
             this->adaptiveScheduler->beginTransportRecovery(
-                observedAt, true
+                schedulerObservedAt, true
             );
         }
         if (observation.quarantined) {
