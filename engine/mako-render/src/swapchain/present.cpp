@@ -206,12 +206,6 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     // source cadence for the fixed-rate limiter or frame-generation backend.
     const auto presentationWait =
         std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
-    const bool subtractPresentationWait =
-        this->privateOrderedTransport &&
-        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
-        presentationWait && *presentationWait > DiagnosticsClock::duration::zero();
-    const auto pacingArrival = subtractPresentationWait
-        ? limiterArrival - *presentationWait : limiterArrival;
     this->applyGamescopeFocus(limiterArrival);
     const bool ownedTimingControlsOutput = this->presentTiming.controlsOutput(
         this->gamescopeRefreshHz.value_or(0));
@@ -423,6 +417,17 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
     if (this->gpuHeadroomResult.capFps > 0)
         baseFpsCap = baseFpsCap > 0 ? std::min(baseFpsCap, this->gpuHeadroomResult.capFps)
             : this->gpuHeadroomResult.capFps;
+    const bool subtractPresentationWait =
+        baseFpsCap > 0.0 && this->privateOrderedTransport &&
+        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
+        presentationWait && *presentationWait > DiagnosticsClock::duration::zero();
+    const auto pacingArrival = subtractPresentationWait
+        ? limiterArrival - *presentationWait : limiterArrival;
+    const auto sourceCadenceFloor = subtractPresentationWait
+        ? std::optional{std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / baseFpsCap)
+          )}
+        : std::nullopt;
     auto limiterDeadline = this->realFramePacer.schedule(
         pacingArrival, baseFpsCap, this->gpuHeadroomResult.capFps > 0
     );
@@ -511,6 +516,7 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         .cadenceStarted = cadenceNow,
         .sourceCadenceWait = subtractPresentationWait
             ? presentationWait : std::nullopt,
+        .sourceCadenceFloor = sourceCadenceFloor,
         .started = startPresentDiagnostic(),
         .originalPresentDeadline = sourceDeadlinePacing
             ? std::optional{limiterDeadline} : std::nullopt,
