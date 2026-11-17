@@ -224,19 +224,11 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         this->gamescopeDetected && !this->privateOrderedTransport;
 
     const auto limiterArrival = DiagnosticsClock::now();
-    // A generated-image acquire can block the application inside the previous
-    // present call. Do not let that renderer-owned wait masquerade as a slower
-    // source cadence for the fixed-rate limiter or frame-generation backend.
+    // Keep acquisition duration separately for transport-pressure policy;
+    // all measured synchronous renderer waits are already accumulated by the
+    // source clock when the previous present call returned.
     const auto presentationWait =
         std::exchange(this->lastGeneratedAcquireWait, std::nullopt);
-    // This wait belongs to MAKO's previous generated-image presentation, not
-    // to the game's source interval. Apply the correction even when only the
-    // game itself limits FPS; a MAKO base-FPS cap is not required.
-    const bool subtractPresentationWait =
-        this->privateOrderedTransport &&
-        this->info.presentMode == VK_PRESENT_MODE_FIFO_KHR &&
-        presentationWait &&
-        *presentationWait > DiagnosticsClock::duration::zero();
     const auto sourceCadenceArrival =
         this->sourceCadenceClock.toSourceTime(limiterArrival);
     this->applyGamescopeFocus(limiterArrival);
