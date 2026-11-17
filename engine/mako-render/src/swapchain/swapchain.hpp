@@ -566,6 +566,9 @@ namespace mako::layer {
         // Private generated-image acquire wait of the last generated present,
         // consumed by the next present. Read only with an acquire window.
         std::optional<std::chrono::steady_clock::duration> lastGeneratedAcquireWait;
+        // One cumulative source-time offset keeps all cadence consumers in
+        // the same domain while wall-clock deadlines remain convertible.
+        SourceCadenceClock sourceCadenceClock;
         CappedFifoBacklogDrain cappedFifoBacklogDrain;
         // The implicit Zink cap at the last present, for its change record.
         double zinkRefreshLimitedCap{};
