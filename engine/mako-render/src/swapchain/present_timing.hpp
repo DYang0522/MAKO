@@ -282,7 +282,9 @@ namespace mako::layer {
                 const VkSwapchainCalibratedTimestampInfoEXT swapchainInfo{
                     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT,
                     .swapchain = this->swapchain,
-                    .presentStage = this->feedbackStage,
+                    .presentStage = domains[i] ==
+                            VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT
+                        ? this->feedbackStage : VkPresentStageFlagsEXT{0},
                     .timeDomainId = ids[i],
                 };
                 const VkCalibratedTimestampInfoKHR info{

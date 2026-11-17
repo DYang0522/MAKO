@@ -122,7 +122,10 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
         }, this->info.ownedPresentTimingAbsolute,
             this->info.ownedPresentStageQueries);
         std::clog << "MAKO Renderer: presentation timing initialized; owner=renderer; "
-                     "transport=VK_EXT_present_timing; active=" << enabled << '\n';
+                     "transport=VK_EXT_present_timing; active=" << enabled
+                  << "; absolute=" << this->info.ownedPresentTimingAbsolute
+                  << "; feedback_stages=0x" << std::hex
+                  << this->info.ownedPresentStageQueries << std::dec << '\n';
     }
     const bool hadPresentTiming = this->presentTiming.active();
     this->presentTiming.update(this->wsiPresentTimeline, this->frameState.realFrameIndex);
