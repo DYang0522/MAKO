@@ -69,15 +69,17 @@ VkResult Swapchain::presentGeneratedFrames(
                 observedAt, timedOut, acquireDeadlineExceeded,
                 plan.boundedOrderedAcquireProbe
             );
+        const auto schedulerObservedAt =
+            this->sourceTimeAt(observedAt);
         if (transitionRecoveryActive && (timedOut || budgetExhausted) &&
                 this->adaptiveScheduler) {
             static_cast<void>(this->adaptiveScheduler
-                ->rejectActiveRampForTransportMiss(observedAt));
+                ->rejectActiveRampForTransportMiss(schedulerObservedAt));
         }
         if (observation.recovered && transitionRecoveryActive &&
                 this->adaptiveScheduler) {
             this->adaptiveScheduler->beginTransportRecovery(
-                observedAt, true
+                schedulerObservedAt, true
             );
         }
         if (observation.quarantined) {
@@ -194,6 +196,7 @@ VkResult Swapchain::presentGeneratedFrames(
             }
             const auto acquireDuration =
                 DiagnosticsClock::now() - acquireStarted;
+            this->recordRendererBlockingDuration(acquireDuration);
             maximumAcquireDuration = std::max(
                 maximumAcquireDuration, acquireDuration
             );

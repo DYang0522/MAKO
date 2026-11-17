@@ -30,6 +30,53 @@ namespace {
         std::exit(1);
     }
 
+    void testRendererBlockingWaitDoesNotDriftSourceCadence() {
+        using Clock = std::chrono::steady_clock;
+        const auto origin = Clock::time_point{} + std::chrono::hours(100000);
+        const std::array<Clock::duration, 8> rendererWaits{
+            0ms, 16ms, 16667us, 8ms, 23ms, 1ms, 16667us, 5ms,
+        };
+
+        // A renderer wait occurs inside one present call and is recorded
+        // before that call returns. The next application's wall-clock arrival
+        // therefore contains the accumulated waits from preceding calls.
+        for (const double sourceFps : {30.0, 29.0}) {
+            const auto interval = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(1.0 / sourceFps)
+            );
+            SourceCadenceClock sourceClock;
+            Clock::duration accumulatedWait{};
+            std::optional<Clock::time_point> previous;
+            for (size_t frame = 0; frame < 1200; ++frame) {
+                const auto sourceFrameAt = origin + interval *
+                    static_cast<int64_t>(frame);
+                const auto wallClockArrival = sourceFrameAt + accumulatedWait;
+                const auto cadence = sourceClock.toSourceTime(wallClockArrival);
+                expect(cadence == sourceFrameAt,
+                    "renderer blocking remained in the source timestamp");
+                expect(sourceClock.toWallTime(cadence) == wallClockArrival,
+                    "source-time deadline did not round-trip to wall time");
+                if (previous)
+                    expect(cadence - *previous == interval,
+                        "renderer blocking accumulated source-cadence drift");
+                previous = cadence;
+
+                const auto wait = rendererWaits[frame % rendererWaits.size()];
+                sourceClock.exclude(wait);
+                accumulatedWait += wait;
+            }
+            expect(sourceClock.excludedDuration() == accumulatedWait,
+                "renderer blocking was not accumulated exactly once");
+        }
+
+        SourceCadenceClock sourceClock;
+        const auto observed = origin + 10ms;
+        sourceClock.exclude(Clock::duration::zero());
+        expect(sourceClock.toSourceTime(observed) == observed &&
+                sourceClock.toWallTime(observed) == observed,
+            "a zero renderer wait changed source time");
+    }
+
     void testSmoothCadenceCapFollowsActivePlan() {
         const SmoothCadenceBaseCap::TimePoint start{};
         for (const uint32_t target : {60U, 90U, 120U, 144U}) {
@@ -766,6 +813,22 @@ void testOrderedPresentationTimeline() {
     expect(larger->presentAt > small->presentAt &&
             larger->presentAt >= start + 10ms + 41666us,
         "increased generated workload reused a shorter readiness lead");
+
+    // Pixel-out-only WSI feedback cannot measure queue-operation readiness.
+    // Use a one-refresh startup lead instead of retaining the four-refresh
+    // unknown-work reserve forever.
+    OrderedPresentTimeline outputFeedbackOnly;
+    const auto outputPeriod = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / 60.0));
+    outputFeedbackOnly.observeSourceBatch(start, 1);
+    const auto outputFirst = outputFeedbackOnly.schedule(
+        start, 60, 60, 2, true, std::nullopt, false);
+    outputFeedbackOnly.observeSourceBatch(start + 2 * outputPeriod, 2);
+    const auto outputNext = outputFeedbackOnly.schedule(
+        start + 2 * outputPeriod, 60, 60, 2, true, std::nullopt, false);
+    expect(outputFirst->presentAt == start + outputPeriod &&
+            outputNext->presentAt == start + 3 * outputPeriod,
+        "pixel-out-only timing uses a bounded one-refresh readiness lead");
     for (const double invalid : {0., -1., 1001.,
             std::numeric_limits<double>::infinity(),
             std::numeric_limits<double>::quiet_NaN()}) {
@@ -1956,6 +2019,7 @@ int main() {
             "disabling a governed cap releases the source immediately");
     }
 
+    testRendererBlockingWaitDoesNotDriftSourceCadence();
     testLongSessionDeadlineBounds();
     testFractionalUsesExistingSourceDeadline();
     testFixedUsesExistingSourceDeadline();

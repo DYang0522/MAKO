@@ -73,6 +73,7 @@ namespace {
         std::unordered_set<VkDevice> presentRetirementDevices;
         std::unordered_set<VkDevice> gamescopeTimingDevices;
         std::unordered_set<VkDevice> presentTimingDevices;
+        std::unordered_set<VkDevice> presentTimingAbsoluteDevices;
         std::unordered_set<VkDevice> hdrMetadataDevices;
         std::unordered_set<VkDevice> lowerHdrMetadataDevices;
         struct QueueIdentity {
@@ -872,6 +873,7 @@ namespace {
             )
             : std::nullopt;
         bool ownedPresentTiming = false;
+        bool ownedPresentTimingAbsolute = false;
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
         if (frameGenerationInteropEnabled && instance_info->surfaceCapabilities2 &&
                 OwnedPresentTiming::ownsNamespace(*info) &&
@@ -897,7 +899,8 @@ namespace {
                     .pNext = &timing,
                 };
                 instance_info->funcs.GetPhysicalDeviceFeatures2(physdev, &features);
-                ownedPresentTiming = ids.presentId2 && timing.presentTiming && timing.presentAtAbsoluteTime;
+                ownedPresentTiming = ids.presentId2 && timing.presentTiming;
+                ownedPresentTimingAbsolute = ownedPresentTiming && timing.presentAtAbsoluteTime;
             }
         }
 #endif
@@ -1017,7 +1020,7 @@ namespace {
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_TIMING_FEATURES_EXT,
                 .pNext = &timingIds,
                 .presentTiming = VK_TRUE,
-                .presentAtAbsoluteTime = VK_TRUE,
+                .presentAtAbsoluteTime = ownedPresentTimingAbsolute ? VK_TRUE : VK_FALSE,
             };
             if (ownedPresentTiming) {
                 for (uint32_t i = 0; i < newInfo.enabledExtensionCount; ++i)
@@ -1069,6 +1072,8 @@ namespace {
             instance_info->gamescopeTimingDevices.insert(*device);
         if (ownedPresentTiming)
             instance_info->presentTimingDevices.insert(*device);
+        if (ownedPresentTimingAbsolute)
+            instance_info->presentTimingAbsoluteDevices.insert(*device);
         if (hdrMetadataEnabled)
             instance_info->hdrMetadataDevices.insert(*device);
         if (lowerHdrMetadataEnabled)
@@ -1099,6 +1104,7 @@ namespace {
             instance_info->presentRetirementDevices.erase(*device);
             instance_info->gamescopeTimingDevices.erase(*device);
             instance_info->presentTimingDevices.erase(*device);
+            instance_info->presentTimingAbsoluteDevices.erase(*device);
             instance_info->hdrMetadataDevices.erase(*device);
             instance_info->lowerHdrMetadataDevices.erase(*device);
         };
@@ -1222,6 +1228,7 @@ namespace {
         instance_info->presentRetirementDevices.erase(device);
         instance_info->gamescopeTimingDevices.erase(device);
         instance_info->presentTimingDevices.erase(device);
+        instance_info->presentTimingAbsoluteDevices.erase(device);
         instance_info->hdrMetadataDevices.erase(device);
         instance_info->lowerHdrMetadataDevices.erase(device);
 
@@ -2454,6 +2461,10 @@ namespace {
             // create swapchain
             VkSwapchainCreateInfoKHR newInfo = *info;
             bool ownedPresentTiming = false;
+            bool ownedPresentTimingAbsolute = false;
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+            VkPresentStageFlagsEXT ownedPresentStageQueries = 0;
+#endif
             std::optional<SpatialScalingExtents> previousVariableExtents;
             std::optional<SpatialScalingExtents>
                 variableSurfaceRollbackExtents;
@@ -2647,12 +2658,18 @@ namespace {
                                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
                                 .surface = driverInfo.surface,
                             };
-                            ownedPresentTiming = query &&
-                                query(it->second.physdev(), &surface, &caps) == VK_SUCCESS &&
+                            const bool timingSurfaceQuerySucceeded = query &&
+                                query(it->second.physdev(), &surface, &caps) == VK_SUCCESS;
+                            ownedPresentTiming = timingSurfaceQuerySucceeded &&
                                 OwnedPresentTiming::surfaceSupported(timing, ids);
-                            if (ownedPresentTiming)
+                            if (ownedPresentTiming) {
+                                ownedPresentStageQueries = timing.presentStageQueries;
+                                ownedPresentTimingAbsolute =
+                                    instance_info->presentTimingAbsoluteDevices.contains(device) &&
+                                    timing.presentAtAbsoluteTimeSupported;
                                 driverInfo.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT |
                                     VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
+                            }
                         }
 #endif
                         const uint32_t provisionedMinImages =
@@ -2987,6 +3004,10 @@ namespace {
                 .gamescopeDisplayTiming =
                     instance_info->gamescopeTimingDevices.contains(device),
                 .ownedPresentTiming = ownedPresentTiming,
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+                .ownedPresentTimingAbsolute = ownedPresentTimingAbsolute,
+                .ownedPresentStageQueries = ownedPresentStageQueries,
+#endif
                 .gamescopeSession = layer_info->root.gamescopeSessionDetected(),
                 .format = newInfo.imageFormat,
                 .colorSpace = newInfo.imageColorSpace,

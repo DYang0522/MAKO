@@ -166,7 +166,10 @@ Swapchain::PresentationFramePlan Swapchain::prepareFramePlan(
                 ? this->smoothCadencePacerHandoff.activeGenerationLimit()
                 : std::nullopt,
             integerBaseCapGenerationLimit,
-            this->orderedPresentationDeadline,
+            this->orderedPresentationDeadline
+                ? std::optional{this->sourceTimeAt(
+                    *this->orderedPresentationDeadline)}
+                : std::nullopt,
             this->gpuHeadroomResult.capFps,
             this->applicationLayerShare
         )
@@ -372,7 +375,7 @@ void Swapchain::handleGeneratedImageAdmissionPressure(
     if (adaptiveOrderedAdmissionMiss) {
         static_cast<void>(
             this->adaptiveScheduler->rejectActiveRampForTransportMiss(
-                DiagnosticsClock::now()
+                this->sourceTimeAt(DiagnosticsClock::now())
             )
         );
     }
@@ -414,7 +417,8 @@ void Swapchain::handleGeneratedImageAdmissionPressure(
         }
         this->recoveryState.generatedImageAdmission.reset();
         static_cast<void>(this->resetGenerationScheduler(
-            DiagnosticsClock::now(), "ordered-wsi-partial-admission"
+            DiagnosticsClock::now(),
+            "ordered-wsi-partial-admission"
         ));
     }
     if (!this->adaptiveScheduler) {
@@ -468,11 +472,15 @@ void Swapchain::preacquireGeneratedImages(
     for (size_t i = 0; i < plan.requestedGeneratedFrames.size(); ++i) {
         uint32_t acquiredImage{};
         const auto acquireStarted = startPresentDiagnostic();
+        const auto rendererAcquireStarted = DiagnosticsClock::now();
         lastAcquireResult = invocation.vk.df().AcquireNextImageKHR(
             invocation.vk.dev(), invocation.swapchain,
             acquireTimeout,
             this->passes.at(i).acquireSemaphore.handle(), VK_NULL_HANDLE,
             &acquiredImage
+        );
+        this->recordRendererBlockingDuration(
+            DiagnosticsClock::now() - rendererAcquireStarted
         );
         plan.preacquireDuration += finishPresentDiagnostic(acquireStarted);
         if (lastAcquireResult == VK_SUCCESS ||

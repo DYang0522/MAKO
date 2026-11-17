@@ -17,6 +17,38 @@
 
 namespace mako::layer {
 
+    /// Maintains one continuous source-time axis while excluding MAKO-owned
+    /// blocking waits. Source-time deadlines are translated back to wall time
+    /// before any sleep or Vulkan presentation operation.
+    class SourceCadenceClock {
+    public:
+        using Clock = std::chrono::steady_clock;
+        using TimePoint = Clock::time_point;
+        using Duration = Clock::duration;
+
+        void exclude(const Duration rendererWait) noexcept {
+            if (rendererWait > Duration::zero())
+                this->excludedWait += rendererWait;
+        }
+
+        [[nodiscard]] TimePoint toSourceTime(
+                const TimePoint wallTime) const noexcept {
+            return wallTime - this->excludedWait;
+        }
+
+        [[nodiscard]] TimePoint toWallTime(
+                const TimePoint sourceTime) const noexcept {
+            return sourceTime + this->excludedWait;
+        }
+
+        [[nodiscard]] Duration excludedDuration() const noexcept {
+            return this->excludedWait;
+        }
+
+    private:
+        Duration excludedWait{};
+    };
+
     /// Explicit Gamescope presentation state published on the verified
     /// server-zero root. Keep the Steam preference, connector capability and
     /// compositor-active feedback separate: an overlay may temporarily stop
@@ -1095,7 +1127,8 @@ namespace mako::layer {
                 const double outputFps, const double refreshFps,
                 const size_t outputBatchSize = 1,
                 const bool generationEnabled = true,
-                const std::optional<TimePoint> sourceDeadline = std::nullopt) {
+                const std::optional<TimePoint> sourceDeadline = std::nullopt,
+                const bool readinessFeedbackAvailable = true) {
             if (!validRate(outputFps) || !validRate(refreshFps) ||
                     outputBatchSize == 0 ||
                     outputBatchSize > GeneratedFramePlan::capacity + 1)
@@ -1134,7 +1167,9 @@ namespace mako::layer {
             const auto measuredReadiness = this->readinessCount
                 ? *std::max_element(this->readiness.begin(),
                     this->readiness.begin() + this->readinessCount)
-                : std::min(4 * refreshPeriod, Clock::duration(maximumReadiness));
+                : std::min(readinessFeedbackAvailable
+                    ? 4 * refreshPeriod : refreshPeriod,
+                    Clock::duration(maximumReadiness));
             // A threaded presentation waiter releases source credit while
             // another batch is pending. Its deadlines already reserve those
             // slots; a second refresh of lead consumes the next frame's work
@@ -1891,6 +1926,19 @@ namespace mako::layer {
         PresentationWaitWindow window;
         size_t holds{0};
     };
+
+    /// The capped backlog drain needs blocking private acquires as queue
+    /// evidence and a CPU source cap that owns real-frame release. The ordered
+    /// SDR transport provides both. The HDR transport never blocks an acquire,
+    /// and the scaling bridge and owned display timing pace outputs in the
+    /// compositor with their own queue reserve. A Zink acquire window keeps
+    /// the drain wherever it applies.
+    [[nodiscard]] constexpr bool cappedFifoBacklogDrainApplies(
+            const bool applicationAcquireWindow, const bool privateOrderedTransport,
+            const bool compositorOutputTiming) noexcept {
+        return applicationAcquireWindow ||
+            (privateOrderedTransport && !compositorOutputTiming);
+    }
 
     /// Zink only: under an ordered-FIFO handoff, a source faster than the
     /// rung's admission rate waits on presentation and fills FIFO. Its rate

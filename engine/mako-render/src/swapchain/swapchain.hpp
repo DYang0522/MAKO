@@ -55,6 +55,10 @@ namespace mako::layer {
         // application has not selected its own timing-feedback namespace.
         bool gamescopeDisplayTiming{false};
         bool ownedPresentTiming{false};
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+        bool ownedPresentTimingAbsolute{false};
+        VkPresentStageFlagsEXT ownedPresentStageQueries{0};
+#endif
         // Any Gamescope signal at creation. Without one, a desktop compositor
         // may need MAKO to space generated outputs itself.
         bool gamescopeSession{false};
@@ -305,6 +309,9 @@ namespace mako::layer {
             uint32_t imageIndex;
             std::span<const VkSemaphore> waitSemaphores;
             std::chrono::steady_clock::time_point cadenceStarted;
+            // Prevent an adjusted cadence timestamp from falling below
+            // the active source-cap interval.
+            std::optional<std::chrono::steady_clock::duration> sourceCadenceFloor;
             mutable std::chrono::steady_clock::time_point started;
             // Fractional may spend the existing cap wait preparing generated
             // outputs. Every real-frame/fallback path retains this deadline.
@@ -365,12 +372,22 @@ namespace mako::layer {
                 backendSourceCadence;
 
             [[nodiscard]] std::chrono::nanoseconds backendSourceInterval(
-                    const std::chrono::steady_clock::time_point cadence) const {
+                    const std::chrono::steady_clock::time_point cadence,
+                    const std::optional<std::chrono::steady_clock::duration>
+                        minimumInterval = std::nullopt) const {
                 if (!this->backendSourceCadence ||
                         cadence <= *this->backendSourceCadence)
                     return {};
+                auto interval = cadence - *this->backendSourceCadence;
+                // cadence is already in the canonical source-time domain;
+                // subtracting renderer waits here would count them twice.
+                if (minimumInterval)
+                    interval = std::max(interval, *minimumInterval);
+                else
+                    interval = std::max(interval,
+                        std::chrono::steady_clock::duration::zero());
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    cadence - *this->backendSourceCadence
+                    interval
                 );
             }
         };
@@ -549,6 +566,13 @@ namespace mako::layer {
         // Private generated-image acquire wait of the last generated present,
         // consumed by the next present. Read only with an acquire window.
         std::optional<std::chrono::steady_clock::duration> lastGeneratedAcquireWait;
+        // One cumulative source-time offset keeps all cadence consumers in
+        // the same domain while wall-clock deadlines remain convertible.
+        SourceCadenceClock sourceCadenceClock;
+        // Measured synchronous waits inside this present call; deliberate
+        // cap/output sleeps are excluded. Applied to source time on return.
+        std::chrono::steady_clock::duration currentRendererBlockingDuration{};
+        bool rendererBlockingMeasurementActive{false};
         CappedFifoBacklogDrain cappedFifoBacklogDrain;
         // The implicit Zink cap at the last present, for its change record.
         double zinkRefreshLimitedCap{};
@@ -663,6 +687,26 @@ namespace mako::layer {
             const PresentInvocation& invocation,
             const PresentationFramePlan& plan,
             bool gamescopeHdrTransport);
+        [[nodiscard]] std::chrono::steady_clock::time_point sourceTimeAt(
+                const std::chrono::steady_clock::time_point wallTime) const noexcept {
+            const auto currentWait = this->rendererBlockingMeasurementActive
+                ? this->currentRendererBlockingDuration
+                : std::chrono::steady_clock::duration::zero();
+            return this->sourceCadenceClock.toSourceTime(wallTime) - currentWait;
+        }
+        [[nodiscard]] std::chrono::steady_clock::time_point wallTimeAt(
+                const std::chrono::steady_clock::time_point sourceTime) const noexcept {
+            const auto currentWait = this->rendererBlockingMeasurementActive
+                ? this->currentRendererBlockingDuration
+                : std::chrono::steady_clock::duration::zero();
+            return this->sourceCadenceClock.toWallTime(sourceTime) + currentWait;
+        }
+        void recordRendererBlockingDuration(
+            std::chrono::steady_clock::duration duration) noexcept {
+            if (this->rendererBlockingMeasurementActive &&
+                    duration > std::chrono::steady_clock::duration::zero())
+                this->currentRendererBlockingDuration += duration;
+        }
         [[nodiscard]] VkResult queuePresentWithRetirementFence(
             const vk::Vulkan& vk, VkQueue queue,
             const VkPresentInfoKHR& presentInfo);
