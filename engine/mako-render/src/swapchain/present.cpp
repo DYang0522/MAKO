@@ -864,7 +864,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             this->instance->scheduleFrames(
                 this->ctx.get(), plan.scheduledGeneratedFrames.timestamps(),
                 this->frameState.backendSourceInterval(
-                    invocation.cadenceStarted, invocation.sourceCadenceWait
+                    invocation.cadenceStarted, invocation.sourceCadenceWait,
+                    invocation.sourceCadenceFloor
                 )
             );
         } catch (const std::exception& error) {
