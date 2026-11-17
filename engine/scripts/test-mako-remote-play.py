@@ -105,7 +105,7 @@ class RemotePlayCommandTests(unittest.TestCase):
         self.command('refresh')
         self.assertEqual(before, self.client.read_bytes())
         self.command('restore-before-uninstall')
-        self.assertEqual(Path('/usr/bin/env').read_bytes(), self.client.read_bytes())
+        self.assertEqual(Path('/bin/sh').read_bytes(), self.client.read_bytes())
 
     def test_conflicts_leave_client_untouched(self):
         backup = self.client.with_name('streaming_client.mako-original')
