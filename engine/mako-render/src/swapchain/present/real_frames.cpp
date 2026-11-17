@@ -449,9 +449,7 @@ VkResult Swapchain::presentHistoryOnly(
             )
         );
         const auto recoveryCompleted =
-            this->sourceCadenceClock.toSourceTime(
-                recoveryCompletedWall - this->currentRendererBlockingDuration
-            );
+            this->sourceTimeAt(recoveryCompletedWall);
         const bool transitionRecoveryActive = this->recoveryState
             .orderedAcquireRecovery.transitionRecoveryActive();
         this->adaptiveScheduler->consumeHistoryWarmupFrame(
