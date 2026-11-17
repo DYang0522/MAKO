@@ -70,8 +70,7 @@ VkResult Swapchain::presentGeneratedFrames(
                 plan.boundedOrderedAcquireProbe
             );
         const auto schedulerObservedAt =
-            this->sourceCadenceClock.toSourceTime(observedAt) -
-                this->currentRendererBlockingDuration;
+            this->sourceTimeAt(observedAt);
         if (transitionRecoveryActive && (timedOut || budgetExhausted) &&
                 this->adaptiveScheduler) {
             static_cast<void>(this->adaptiveScheduler
