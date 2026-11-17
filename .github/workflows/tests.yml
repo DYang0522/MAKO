@@ -162,6 +162,58 @@ jobs:
       - name: Run Renderer tests
         run: ctest --test-dir engine/build/ci-${{ matrix.toolchain }} --output-on-failure
 
+      - name: Package patched x86_64 Renderer libraries
+        if: matrix.toolchain == 'clang'
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/mako-renderer-patch"
+          mkdir -p "$package_dir/lib"
+
+          install -Dm755 engine/build/ci-clang/mako-render/libmako-render.so \
+            "$package_dir/lib/libmako-render.so"
+          install -Dm755 engine/build/ci-clang/mako-render/libmako-render-scaling.so \
+            "$package_dir/lib/libmako-render-scaling.so"
+
+          cat > "$package_dir/INSTALL.txt" <<'EOF'
+          MAKO Renderer patch build (x86_64)
+          ==================================
+
+          This archive contains the two 64-bit Renderer shared libraries built
+          from the MAKO fork branch. It is a patch for an existing MAKO Renderer
+          installation, not a complete standalone MAKO distribution.
+
+          Close all games before replacing either library. Locate the installed
+          files with:
+
+            find "$HOME/.local" -type f \\
+              \\( -name libmako-render.so -o -name libmako-render-scaling.so \\) -print
+
+          Back up the existing libraries, then copy the matching files from this
+          archive's lib/ directory into the same installed lib/ directory.
+          Do not copy these files into the source checkout's engine/build tree.
+
+          Keep the backups so the previous Renderer can be restored. This build
+          contains x86_64 libraries only; it does not replace 32-bit layers or
+          package MAKO Decky.
+          EOF
+
+          git rev-parse HEAD > "$package_dir/SOURCE-COMMIT.txt"
+          (
+            cd "$package_dir"
+            sha256sum lib/*.so > SHA256SUMS
+          )
+          tar -C "$package_dir" -cJf \
+            "$RUNNER_TEMP/MAKO-Renderer-patch-x86_64.tar.xz" .
+
+      - name: Upload patched x86_64 Renderer
+        if: matrix.toolchain == 'clang'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MAKO-Renderer-patch-x86_64
+          path: ${{ runner.temp }}/MAKO-Renderer-patch-x86_64.tar.xz
+          if-no-files-found: error
+          retention-days: 14
+
   renderer-sanitizers:
     name: MAKO Renderer (ASan + UBSan)
     runs-on: ubuntu-latest
