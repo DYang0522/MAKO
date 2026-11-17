@@ -24,10 +24,14 @@ namespace {
     uint32_t queueSize{}, pastCalls{}, domainCalls{};
     uint64_t duration{16'666'667}, interval{8'333'333}, propertiesCounter{1}, domainCounter{1};
     uint64_t deviation{}, clockOffset{9'000'000'000};
+    VkPresentStageFlagsEXT calibrationStage{OwnedPresentTiming::queueStage};
     VkResult pastStatus{VK_SUCCESS}, sizeStatus{VK_SUCCESS}, calibrationStatus{VK_SUCCESS};
     VkResult propertiesStatus{VK_SUCCESS};
     bool availableDomain{true}, complete{true};
-    struct Record { uint64_t id, time, domainId{7}; };
+    struct Record {
+        uint64_t id, time, domainId{7};
+        VkPresentStageFlagsEXT stage{OwnedPresentTiming::queueStage};
+    };
     std::vector<Record> ready;
     VkResult VKAPI_CALL setSize(VkDevice, VkSwapchainKHR, uint32_t size) {
         queueSize = size;
@@ -54,8 +58,8 @@ namespace {
         expect(count == 1 && info->timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT,
             "calibrate the selected presentation clock");
         const auto* local = static_cast<const VkSwapchainCalibratedTimestampInfoEXT*>(info->pNext);
-        expect(local && local->presentStage == OwnedPresentTiming::queueStage && local->timeDomainId == 7,
-            "calibration identifies this swapchain stage and domain");
+        expect(local && local->presentStage == calibrationStage && local->timeDomainId == 7,
+            "calibration identifies the selected feedback stage and domain");
         timestamps[0] = nowNs() + clockOffset;
         *maxDeviation = deviation;
         return calibrationStatus;
@@ -72,13 +76,15 @@ namespace {
         out->presentationTimingCount = static_cast<uint32_t>(ready.size());
         for (size_t i = 0; i < ready.size(); ++i) {
             auto& record = out->pPresentationTimings[i];
-            expect(record.sType == VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_EXT && record.presentStageCount == 1,
-                "initialize output structs and stage capacity");
+            expect(record.sType == VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_EXT &&
+                    record.presentStageCount == OwnedPresentTiming::maxPresentStages,
+                "initialize output structs and bounded stage capacity");
             record.presentId = ready[i].id;
+            record.presentStageCount = 1;
             record.timeDomain = VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT;
             record.timeDomainId = ready[i].domainId;
             record.reportComplete = complete;
-            record.pPresentStages[0] = {OwnedPresentTiming::queueStage, ready[i].time};
+            record.pPresentStages[0] = {ready[i].stage, ready[i].time};
         }
         ready.clear();
         return pastStatus;
@@ -111,8 +117,10 @@ int main() {
     VkSurfaceCapabilitiesPresentId2KHR surfaceIds{
         .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR, .presentId2Supported = VK_TRUE};
     expect(OwnedPresentTiming::surfaceSupported(caps, surfaceIds), "surface must support the complete contract");
+    caps.presentAtAbsoluteTimeSupported = VK_FALSE;
     caps.presentStageQueries = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
-    expect(!OwnedPresentTiming::surfaceSupported(caps, surfaceIds), "predicted display time cannot replace observed queue completion");
+    expect(OwnedPresentTiming::surfaceSupported(caps, surfaceIds),
+        "Wayland output feedback remains usable without absolute-time scheduling");
 
     OwnedPresentTiming timing;
     expect(!timing.initialize(VK_NULL_HANDLE, VK_NULL_HANDLE, {}), "missing commands retain existing pacing");
@@ -267,6 +275,61 @@ int main() {
     expect(delayedProperties.controlsOutput() && delayedProperties.outputRate(120) > 89.9 &&
             delayedProperties.outputRate(120) < 90.1,
         "changed properties recover on the next batch even with the same counter");
+    // Wayland can expose pixel-out timestamps without supporting absolute targets.
+    OwnedPresentTiming feedbackOnly;
+    OrderedPresentTimeline feedbackTimeline;
+    const VkPresentStageFlagsEXT outputStage = OwnedPresentTiming::pixelOutStage;
+    calibrationStage = outputStage;
+    interval = duration = 16'666'667;
+    ++propertiesCounter;
+    pastStatus = VK_SUCCESS;
+    propertiesStatus = VK_SUCCESS;
+    calibrationStatus = VK_SUCCESS;
+    deviation = 0;
+    availableDomain = true;
+    complete = true;
+    ready.clear();
+    expect(feedbackOnly.initialize(VK_NULL_HANDLE, VK_NULL_HANDLE, functions,
+            false, outputStage),
+        "initialize output-stage feedback without absolute target support");
+    expect(feedbackOnly.controlsOutput() &&
+            !feedbackOnly.readinessFeedbackAvailable(),
+        "pixel-out feedback controls the timeline without pretending to measure queue readiness");
+    mode = VK_PRESENT_MODE_FIFO_KHR;
+    feedbackOnly.observePresentMode(&modes);
+    const auto feedbackStart = Clock::now() + std::chrono::seconds(1);
+    const auto refreshPeriod = std::chrono::nanoseconds(16'666'667);
+    bool realignmentObserved = false;
+    for (uint64_t frame = 1; frame <= 7; ++frame) {
+        const auto now = feedbackStart + refreshPeriod * static_cast<int64_t>((frame - 1) * 2);
+        feedbackTimeline.observeSourceBatch(now, frame);
+        feedbackOnly.update(feedbackTimeline, frame);
+        for (size_t output = 0; output < 2; ++output) {
+            const auto slot = feedbackTimeline.schedule(now, 60, 60, 2, true,
+                std::nullopt, false);
+            expect(slot.has_value(), "feedback-only timeline schedules an output");
+            VkPresentTimingInfoEXT feedbackRequest{};
+            uint64_t feedbackId{};
+            expect(feedbackOnly.prepare(slot->presentAt, feedbackTimeline,
+                    feedbackRequest, feedbackId),
+                "feedback-only present can be queued");
+            expect(feedbackRequest.targetTime == 0 &&
+                    feedbackRequest.presentStageQueries == outputStage,
+                "unsupported absolute scheduling uses targetTime zero but retains pixel-out queries");
+            if (frame == 7 && output == 0)
+                realignmentObserved = slot->realignment == refreshPeriod;
+            const auto targetNs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    slot->presentAt.time_since_epoch()).count());
+            ready.push_back({feedbackId,
+                targetNs + clockOffset + static_cast<uint64_t>(refreshPeriod.count()) + 1'000'000,
+                7, outputStage});
+        }
+    }
+    expect(realignmentObserved,
+        "twelve persistent whole-refresh pixel-out delays trigger FIFO realignment");
+    calibrationStage = OwnedPresentTiming::queueStage;
+    expectedStageCount = 1;
 #else
     expect(!OwnedPresentTiming{}.active(), "older manual-build headers keep timing disabled");
 #endif

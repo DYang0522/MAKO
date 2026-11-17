@@ -85,7 +85,8 @@ VkResult Swapchain::queuePresentWithRetirementFence(
         this->wsiPresentTimeline.observeSourceBatch(DiagnosticsClock::now(), this->frameState.realFrameIndex);
         const auto slot = this->wsiPresentTimeline.schedule(DiagnosticsClock::now(),
             this->presentTiming.outputRate(policy.outputFps), refresh,
-            this->bridgeOutputBatchSize, policy.generatedTimeline, this->outputSourceDeadline);
+            this->bridgeOutputBatchSize, policy.generatedTimeline,
+            this->outputSourceDeadline, this->presentTiming.readinessFeedbackAvailable());
         if (slot) {
             std::this_thread::sleep_until(slot->submitAt);
             if (this->presentTiming.prepare(slot->presentAt, this->wsiPresentTimeline, timing, timingId)) {

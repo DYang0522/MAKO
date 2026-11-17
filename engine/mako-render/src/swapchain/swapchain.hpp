@@ -55,6 +55,10 @@ namespace mako::layer {
         // application has not selected its own timing-feedback namespace.
         bool gamescopeDisplayTiming{false};
         bool ownedPresentTiming{false};
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+        bool ownedPresentTimingAbsolute{false};
+        VkPresentStageFlagsEXT ownedPresentStageQueries{0};
+#endif
         // Any Gamescope signal at creation. Without one, a desktop compositor
         // may need MAKO to space generated outputs itself.
         bool gamescopeSession{false};

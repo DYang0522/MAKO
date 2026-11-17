@@ -119,7 +119,8 @@ VkResult Swapchain::presentFrame(const vk::Vulkan& vk,
             .domains = reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(get("vkGetSwapchainTimeDomainPropertiesEXT")),
             .past = reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(get("vkGetPastPresentationTimingEXT")),
             .calibrate = reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(get("vkGetCalibratedTimestampsKHR")),
-        });
+        }, this->info.ownedPresentTimingAbsolute,
+            this->info.ownedPresentStageQueries);
         std::clog << "MAKO Renderer: presentation timing initialized; owner=renderer; "
                      "transport=VK_EXT_present_timing; active=" << enabled << '\n';
     }

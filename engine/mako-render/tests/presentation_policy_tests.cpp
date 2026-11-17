@@ -766,6 +766,22 @@ void testOrderedPresentationTimeline() {
     expect(larger->presentAt > small->presentAt &&
             larger->presentAt >= start + 10ms + 41666us,
         "increased generated workload reused a shorter readiness lead");
+
+    // Pixel-out-only WSI feedback cannot measure queue-operation readiness.
+    // Use a one-refresh startup lead instead of retaining the four-refresh
+    // unknown-work reserve forever.
+    OrderedPresentTimeline outputFeedbackOnly;
+    const auto outputPeriod = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / 60.0));
+    outputFeedbackOnly.observeSourceBatch(start, 1);
+    const auto outputFirst = outputFeedbackOnly.schedule(
+        start, 60, 60, 2, true, std::nullopt, false);
+    outputFeedbackOnly.observeSourceBatch(start + 2 * outputPeriod, 2);
+    const auto outputNext = outputFeedbackOnly.schedule(
+        start + 2 * outputPeriod, 60, 60, 2, true, std::nullopt, false);
+    expect(outputFirst->presentAt == start + outputPeriod &&
+            outputNext->presentAt == start + 3 * outputPeriod,
+        "pixel-out-only timing uses a bounded one-refresh readiness lead");
     for (const double invalid : {0., -1., 1001.,
             std::numeric_limits<double>::infinity(),
             std::numeric_limits<double>::quiet_NaN()}) {

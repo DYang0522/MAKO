@@ -1095,7 +1095,8 @@ namespace mako::layer {
                 const double outputFps, const double refreshFps,
                 const size_t outputBatchSize = 1,
                 const bool generationEnabled = true,
-                const std::optional<TimePoint> sourceDeadline = std::nullopt) {
+                const std::optional<TimePoint> sourceDeadline = std::nullopt,
+                const bool readinessFeedbackAvailable = true) {
             if (!validRate(outputFps) || !validRate(refreshFps) ||
                     outputBatchSize == 0 ||
                     outputBatchSize > GeneratedFramePlan::capacity + 1)
@@ -1134,7 +1135,9 @@ namespace mako::layer {
             const auto measuredReadiness = this->readinessCount
                 ? *std::max_element(this->readiness.begin(),
                     this->readiness.begin() + this->readinessCount)
-                : std::min(4 * refreshPeriod, Clock::duration(maximumReadiness));
+                : std::min(readinessFeedbackAvailable
+                    ? 4 * refreshPeriod : refreshPeriod,
+                    Clock::duration(maximumReadiness));
             // A threaded presentation waiter releases source credit while
             // another batch is pending. Its deadlines already reserve those
             // slots; a second refresh of lead consumes the next frame's work
